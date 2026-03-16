@@ -13,11 +13,23 @@ load_dotenv(ENV_PATH)
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel, Field
 
+#agregado por felix ortiz 16-03, esto es para permitir la comunicacion con front, evitando asi un error 405
+from fastapi.middleware.cors import CORSMiddleware
+
 from services.ollama_client import generate
 from services.qicore_client import gate as qicore_gate
 
 
 app = FastAPI(title="xapity", version="0.1.0")
+
+#agregado por felix ortiz 16-03
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["+"],
+)
 
 DEBUG = os.getenv("DEBUG", "false").lower() in {"1", "true", "yes", "y"}
 GATE_ENGINE = os.getenv("GATE_ENGINE", "ollama")
