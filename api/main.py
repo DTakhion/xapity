@@ -6,6 +6,26 @@ import uuid
 from typing import Optional, Any, Dict
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime, timezone
+
+# NUEVO:
+# Se construyo schemas/service.py central del proyecto en vez de redefinir otro BaseModel local.
+from schemas.service import ServiceCreateRequest, ServiceResponse, ServiceUpdateRequest
+
+# Ahora que la tarea de Felipe ya quedó lista, integramos slug y tags al flujo real.
+from utils.slug import generate_slug
+from utils.tags import generate_tags
+
+# Lógica de persistencia del repo
+from services.service_repo import create_service, get_services_list, update_service
+
+# Validación de duplicidad antes de insertar en Mongo.
+from db.mongo_persistence import service_name_exists, get_service_by_service_id, service_name_exists
+
+# NUEVO:
+# Se reutilizaron los schemas centrales del proyecto en vez de definir otros locales.
+# Esto mantiene consistencia con el POST /services y evita duplicación.
+from schemas.service import ServicesListResponse
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
@@ -102,3 +122,163 @@ def lab_gate(req: GateRequest):
         "llm": llm_out,
         "qicore": qicore_out,
     }
+
+# POST /services
+
+@app.post("/services", response_model=ServiceResponse, status_code=201)
+async def create_service_endpoint(service: ServiceCreateRequest):
+    """
+    Crea un nuevo servicio.
+
+    Flujo:
+    1. Valida el body con ServiceCreateRequest
+    2. Revisa si ya existe un servicio con el mismo nombre para el business actual
+    3. Genera serviceId, slug, tags y timestamps
+    4. Persiste el documento en Mongo
+    5. Retorna el documento insertado
+    """
+
+    # MANTENIDO / AJUSTADO:
+    # Se mantiene el businessId fijo "1" porque así se definió temporalmente
+    # para esta etapa del proyecto.
+    # Más adelante esto debería venir desde auth / tenant context.
+    business_id = "1"
+
+    # NUEVO:
+    # Se usa la validación central contra Mongo para evitar duplicados por nombre
+    # dentro del mismo businessId.
+    if service_name_exists(service.name, business_id):
+        raise HTTPException(
+            status_code=400,
+            detail="A service with this name already exists for this business."
+        )
+
+    # UUID para serviceId.
+    service_id = str(uuid.uuid4())
+
+    # timestamps UTC
+    now = datetime.now(timezone.utc)
+    
+    # Activado   
+    slug = generate_slug(service.name)
+    tags = generate_tags(service.name, service.description)
+
+    # AJUSTADO:
+    # Se construye el documento final alineado con ServiceResponse
+    # y con la estructura esperada en Mongo.
+    document = {
+        "serviceId": service_id,
+        "businessId": business_id,
+        "name": service.name,
+        "slug": slug,
+        "description": service.description,
+        "category": service.category,
+        "tags": tags,
+        "isActive": True,
+        "isDeleted": False,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    # AJUSTADO:
+    # Antes se llamaba create_service(document) pero luego se retornaba el document local.
+    # Ahora devolvemos lo que realmente quedó insertado en Mongo,
+    # incluyendo potencialmente el _id serializado.
+    inserted_service = await create_service(document)
+
+    return inserted_service
+
+
+# GET /services
+
+@app.get("/services", response_model=ServicesListResponse)
+async def get_services_endpoint():
+    """
+    Obtiene el listado de servicios no eliminados, ordenados por fecha de creación descendente.
+
+    Flujo:
+    1. Consulta la capa repo
+    2. Repo delega en la persistencia central de Mongo
+    3. Se retorna items + total
+    """
+
+    try:
+        # AJUSTADO:
+        # Antes Dem, consultabas Mongo directamente con un cliente propio.
+        # Ahora reutilizamos la capa repo para mantener la arquitectura del proyecto.
+        services_data = await get_services_list()
+
+        # MANTENIDO:
+        # Se conserva el formato de respuesta esperado: items + total
+        return {
+            "items": services_data,
+            "total": len(services_data)
+        }
+
+    except Exception as exc:
+        # AJUSTADO:
+        # Se mantiene manejo controlado de errores,
+        # pero con mensaje más limpio y consistente.
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving services."
+        ) from exc
+
+# PATCH /services/{serviceId}
+
+@app.patch("/services/{serviceId}", response_model=ServiceResponse)
+async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest):
+    """
+    Updates an existing service by serviceId.
+    """
+
+    existing_service = get_service_by_service_id(serviceId)
+
+    if not existing_service:
+        raise HTTPException(
+            status_code=404,
+            detail="Service not found."
+        )
+
+    update_data = service.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields provided for update."
+        )
+
+    business_id = existing_service["businessId"]
+
+    # Si viene name y cambia, validar duplicado
+    if "name" in update_data:
+        new_name = update_data["name"]
+
+        if new_name != existing_service["name"] and service_name_exists(new_name, business_id):
+            raise HTTPException(
+                status_code=400,
+                detail="A service with this name already exists for this business."
+            )
+
+    # Regenerar slug si cambia name
+    if "name" in update_data:
+        update_data["slug"] = generate_slug(update_data["name"])
+
+    # Regenerar tags si cambia name o description
+    if "name" in update_data or "description" in update_data:
+        final_name = update_data.get("name", existing_service["name"])
+        final_description = update_data.get("description", existing_service["description"])
+        update_data["tags"] = generate_tags(final_name, final_description)
+
+    # Siempre actualizar timestamp
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+
+    updated_service = await update_service(serviceId, update_data)
+
+    if not updated_service:
+        raise HTTPException(
+            status_code=404,
+            detail="Service not found."
+        )
+
+    return updated_service
