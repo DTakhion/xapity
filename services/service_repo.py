@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 # NUEVO:
 # El repo no inserta directo con pymongo aquí mismo.
 # Reutiliza la capa de persistencia central del proyecto.
-from db.mongo_persistence import insert_service, get_services, update_service_by_service_id
+from db.mongo_persistence import insert_service, get_services, update_service_by_service_id, soft_delete_service_by_service_id
 
 async def create_service(document: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -60,3 +60,14 @@ async def update_service(
 
     except Exception as exc:
         raise RuntimeError("Error updating service in repository layer.") from exc
+
+async def delete_service(service_id: str) -> Dict[str, Any] | None:
+    """
+    Soft deletes a service in MongoDB and returns the updated document.
+    """
+    try:
+        deleted_service = soft_delete_service_by_service_id(service_id)
+        return deleted_service
+
+    except Exception as exc:
+        raise RuntimeError("Error deleting service in repository layer.") from exc

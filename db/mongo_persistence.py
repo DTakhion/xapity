@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from pymongo import MongoClient, ReturnDocument
@@ -126,7 +127,8 @@ def get_service_by_service_id(service_id: str) -> Optional[Dict[str, Any]]:
     """
     try:
         collection = get_services_collection()
-        document = collection.find_one({"serviceId": service_id})
+        #document = collection.find_one({"serviceId": service_id})
+        document = collection.find_one({"serviceId": service_id, "isDeleted": False})
 
         if not document:
             return None
@@ -180,3 +182,29 @@ def update_service_by_service_id(
 
     except PyMongoError as exc:
         raise RuntimeError("Error updating service by serviceId.") from exc
+
+def soft_delete_service_by_service_id(service_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Soft deletes a service by serviceId and returns the updated document.
+    """
+    try:
+        collection = get_services_collection()
+
+        document = collection.find_one_and_update(
+            {"serviceId": service_id, "isDeleted": False},
+            {
+                "$set": {
+                    "isDeleted": True,
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error soft deleting service by serviceId.") from exc

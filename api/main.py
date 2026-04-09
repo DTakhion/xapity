@@ -17,10 +17,10 @@ from utils.slug import generate_slug
 from utils.tags import generate_tags
 
 # Lógica de persistencia del repo
-from services.service_repo import create_service, get_services_list, update_service
+from services.service_repo import create_service, get_services_list, update_service, delete_service
 
 # Validación de duplicidad antes de insertar en Mongo.
-from db.mongo_persistence import service_name_exists, get_service_by_service_id, service_name_exists
+from db.mongo_persistence import service_name_exists, get_service_by_service_id
 
 # NUEVO:
 # Se reutilizaron los schemas centrales del proyecto en vez de definir otros locales.
@@ -229,7 +229,15 @@ async def get_services_endpoint():
 @app.patch("/services/{serviceId}", response_model=ServiceResponse)
 async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest):
     """
-    Updates an existing service by serviceId.
+    Actualiza parcialmente un servicio existente por serviceId.
+
+    Reglas:
+    - Si el servicio no existe, retorna 404
+    - Si no se envían campos para actualizar, retorna 400
+    - Si cambia el nombre, valida duplicidad dentro del mismo businessId
+    - Si cambia name, regenera slug
+    - Si cambia name o description, regenera tags
+    - Siempre actualiza updatedAt
     """
 
     existing_service = get_service_by_service_id(serviceId)
@@ -237,7 +245,7 @@ async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest)
     if not existing_service:
         raise HTTPException(
             status_code=404,
-            detail="Service not found."
+            detail="Servicio no encontrado."
         )
 
     update_data = service.model_dump(exclude_unset=True)
@@ -245,32 +253,30 @@ async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest)
     if not update_data:
         raise HTTPException(
             status_code=400,
-            detail="No fields provided for update."
+            detail="Sin campos para actaulizar."
         )
 
     business_id = existing_service["businessId"]
 
-    # Si viene name y cambia, validar duplicado
+    # Validar duplicado solo si viene name y realmente cambia
     if "name" in update_data:
         new_name = update_data["name"]
 
         if new_name != existing_service["name"] and service_name_exists(new_name, business_id):
             raise HTTPException(
                 status_code=400,
-                detail="A service with this name already exists for this business."
+                detail="Un servicio con este nombre ya existe para este negocio."
             )
 
-    # Regenerar slug si cambia name
-    if "name" in update_data:
-        update_data["slug"] = generate_slug(update_data["name"])
+        update_data["slug"] = generate_slug(new_name)
 
-    # Regenerar tags si cambia name o description
+    # Regeneramos tags si cambia name o description
     if "name" in update_data or "description" in update_data:
         final_name = update_data.get("name", existing_service["name"])
         final_description = update_data.get("description", existing_service["description"])
         update_data["tags"] = generate_tags(final_name, final_description)
 
-    # Siempre actualizar timestamp
+    # Timestamp de actualización
     update_data["updatedAt"] = datetime.now(timezone.utc)
 
     updated_service = await update_service(serviceId, update_data)
@@ -278,7 +284,31 @@ async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest)
     if not updated_service:
         raise HTTPException(
             status_code=404,
-            detail="Service not found."
+            detail="Servicio no encontrado."
         )
 
     return updated_service
+
+# DELETE /services/{serviceId}
+
+@app.delete("/services/{serviceId}", response_model=ServiceResponse)
+async def delete_service_endpoint(serviceId: str):
+    """
+    Soft deletes an existing service by serviceId.
+
+    Regla:
+    - No elimina físicamente el documento
+    - Marca isDeleted=True
+    - Actualiza updatedAt
+    - Si no existe o ya está eliminado, retorna 404
+    """
+
+    deleted_service = await delete_service(serviceId)
+
+    if not deleted_service:
+        raise HTTPException(
+            status_code=404,
+            detail="Service not found."
+        )
+
+    return deleted_service
