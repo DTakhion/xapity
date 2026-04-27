@@ -187,6 +187,15 @@ async def create_service_endpoint(service: ServiceCreateRequest):
         "isDeleted": False,
         "createdAt": now,
         "updatedAt": now,
+        #OPERATIVOS------------------------------
+        "durationMinutes": service.durationMinutes,
+        "basePrice": service.basePrice,
+        "beforeCareInstructions": service.beforeCareInstructions,
+        "afterCareInstructions": service.afterCareInstructions,
+        "isBookableOnline": service.isBookableOnline,
+        #COMERCIALES-----------------------------
+        "includes": service.includes,
+        "products": service.products,
     }
 
     # AJUSTADO:
