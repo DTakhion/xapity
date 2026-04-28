@@ -8,6 +8,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
+#Revisar
+#Agregado por Felipe para el uso del codigo staff.py que se encuentra en schemas
+from schemas.staff import StaffCreate, StaffResponse
+from services.staff_service import create_staff
+
+
+@app.post("/staff", response_model=StaffResponse)
+def create_staff_endpoint(staff: StaffCreate):
+    return create_staff(staff.dict())
+
 # NUEVO:
 # Se construyo schemas/service.py central del proyecto en vez de redefinir otro BaseModel local.
 from schemas.service import ServiceCreateRequest, ServiceResponse, ServiceUpdateRequest
