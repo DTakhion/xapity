@@ -271,7 +271,7 @@ async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest)
     if not update_data:
         raise HTTPException(
             status_code=400,
-            detail="Sin campos para actaulizar."
+            detail="Sin campos para actualizar."
         )
 
     business_id = existing_service["businessId"]
