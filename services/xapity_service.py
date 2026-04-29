@@ -12,7 +12,7 @@ from services.ollama_client import generate
 
 INTENT_MODEL_TEMPERATURE = 0.0
 
-ALLOWED_INTENTS = {"greeting", "farewell", "list_services", "unknown"}
+ALLOWED_INTENTS = {"greeting", "farewell", "list_services", "sales_total", "unknown"}
 
 
 def normalize_message(text: str) -> str:
@@ -104,6 +104,27 @@ def detect_intent_fastpath(message: str) -> XapityIntentAnalysis | None:
             has_noise=False,
             needs_clarification=False,
         )
+    
+    sales_keywords = {
+        "venta",
+        "ventas",
+        "ingreso",
+        "ingresos",
+        "monto total",
+        "total ventas",
+        "total ingresos",
+        "ingresos por venta",
+        "concepto de venta",
+    }
+
+    if any(keyword in normalized for keyword in sales_keywords):
+        return XapityIntentAnalysis(
+            intent="sales_total",
+            confidence=0.9,
+            is_ambiguous=False,
+            has_noise=False,
+            needs_clarification=False,
+        )
 
     return None
 
@@ -125,6 +146,7 @@ Intenciones permitidas:
 - greeting
 - farewell
 - list_services
+- sales_total
 - unknown
 
 Definiciones:
@@ -152,7 +174,15 @@ Definiciones:
    - ver servicios
    - lista de servicios
 
-4. Usa "unknown" cuando el mensaje sea realmente ambiguo, incoherente, demasiado ruidoso
+4. Usa "sales_total" cuando el usuario quiera conocer el monto total de ventas,
+   ingresos por venta, ventas de un periodo, ingresos comerciales o total vendido.
+   Ejemplos:
+   - cuál es el monto total de ingresos por concepto de venta el mes pasado
+   - cuánto vendí en marzo
+   - total de ventas del mes pasado
+   - ingresos por ventas entre el 1 y el 31 de marzo
+
+5. Usa "unknown" cuando el mensaje sea realmente ambiguo, incoherente, demasiado ruidoso
    o no exprese una intención razonablemente inferible.
 
 Criterios importantes:
@@ -163,13 +193,13 @@ Criterios importantes:
 - Solo marca "needs_clarification" como true si de verdad falta contexto para actuar.
 
 Debes devolver exactamente este formato JSON:
-{{
-  "intent": "greeting | farewell | list_services | unknown",
+{
+  "intent": "greeting | farewell | list_services | sales_total | unknown",
   "confidence": 0.0,
   "is_ambiguous": false,
   "has_noise": false,
   "needs_clarification": false
-}}
+}
 
 Mensaje del usuario:
 \"\"\"{message}\"\"\"
@@ -227,7 +257,7 @@ def parse_intent_response(raw_text: str) -> XapityIntentAnalysis:
         confidence = min(confidence, 0.4)
         needs_clarification = True
 
-    if intent in {"greeting", "farewell", "list_services"}:
+    if intent in {"greeting", "farewell", "list_services", "sales_total"}:
         is_ambiguous = False if confidence >= 0.7 else is_ambiguous
         has_noise = False if confidence >= 0.7 else has_noise
         needs_clarification = False if confidence >= 0.7 else needs_clarification
@@ -341,6 +371,9 @@ def build_xapity_reply(analysis: XapityIntentAnalysis, total: int | None = None)
             return "Claro, tengo 1 servicio disponible en este momento."
 
         return f"Claro, tengo {total} servicios disponibles en este momento."
+    
+    if analysis.intent == "sales_total":
+        return "Claro, puedo consultar el monto total de ingresos por ventas para el periodo solicitado."
 
     return (
         "No logré entender bien tu solicitud. "

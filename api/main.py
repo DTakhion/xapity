@@ -6,7 +6,7 @@ import uuid
 from typing import Optional, Any, Dict
 from pathlib import Path
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 
 # Esta es la importanción correcta para los endpoints de Staff
 from schemas.staff import StaffCreateRequest, StaffResponse
@@ -42,6 +42,23 @@ from db.mongo_persistence import service_name_exists, get_service_by_service_id
 # Esto mantiene consistencia con el POST /services y evita duplicación.
 from schemas.service import ServicesListResponse
 
+from schemas.availability import AvailabilityRequest, AvailabilityResponse
+from schemas.appointment import (
+    AppointmentCreateRequest,
+    AppointmentUpdateRequest,
+    AppointmentResponse,
+    AppointmentsListResponse,
+)
+
+from services.availability_service import get_availability_slots
+from services.appointment_repo import (
+    create_appointment,
+    get_appointments_list,
+    get_appointment,
+    update_appointment,
+    delete_appointment,
+)
+
 from schemas.xapity_chat import (
     XapityChatRequest,
     XapityChatResponse,
@@ -50,6 +67,8 @@ from schemas.xapity_chat import (
 )
 
 from services.xapity_service import detect_xapity_intent, build_xapity_reply
+
+from services.sales_service import get_sales_total_for_period
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
@@ -346,6 +365,19 @@ async def delete_service_endpoint(serviceId: str):
 
     return deleted_service
 
+def get_previous_month_range(today: date | None = None) -> tuple[date, date]:
+    today = today or date.today()
+
+    first_day_current_month = today.replace(day=1)
+    last_day_previous_month = first_day_current_month - timedelta(days=1)
+    first_day_previous_month = last_day_previous_month.replace(day=1)
+
+    return first_day_previous_month, last_day_previous_month
+
+
+def format_clp(value: float) -> str:
+    return f"${int(round(value)):,.0f}".replace(",", ".")
+
 # POST /xapity/chat
 
 @app.post("/xapity/chat", response_model=XapityChatResponse)
@@ -390,8 +422,62 @@ async def xapity_chat_endpoint(
                     "request_id": request_id,
                 },
             ) from exc
+    
+    # 4. Caso: total de ventas / ingresos por venta
+    if analysis.intent == "sales_total":
+        try:
+            # MVP:
+            # businessId fijo para Luca.
+            # Más adelante debe venir desde auth / tenant context.
+            business_id = 5
 
-    # 4. Caso: resto de intenciones
+            # MVP:
+            # por ahora resolvemos "mes pasado".
+            start_date, end_date = get_previous_month_range()
+
+            result = get_sales_total_for_period(
+                business_id=business_id,
+                start_date=start_date,
+                end_date=end_date,
+                include_documents=[33, 34],
+            )
+
+            total = float(result.get("totalIngresosVenta") or 0)
+            total_documentos = int(result.get("totalDocumentos") or 0)
+
+            reply = (
+                f"El monto total de ingresos por ventas para el periodo "
+                f"{start_date.isoformat()} al {end_date.isoformat()} "
+                f"es de {format_clp(total)}, considerando {total_documentos} documentos."
+            )
+
+            return XapityChatResponse(
+                request_id=request_id,
+                message=req.message,
+                analysis=analysis,
+                reply=reply,
+                data={
+                    "businessId": business_id,
+                    "startDate": start_date.isoformat(),
+                    "endDate": end_date.isoformat(),
+                    "totalIngresosVenta": total,
+                    "totalIngresosVentaFormatted": format_clp(total),
+                    "totalDocumentos": total_documentos,
+                    "byDocumentType": result.get("byDocumentType", []),
+                },
+                metadata=metadata,
+            )
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "xapity_sales_total_failed",
+                    "request_id": request_id,
+                },
+            ) from exc
+
+    # 5. Caso: resto de intenciones
     return XapityChatResponse(
         request_id=request_id,
         message=req.message,
@@ -461,3 +547,184 @@ async def get_staff_endpoint():
             status_code=500,
             detail="Internal error while retrieving staff."
         ) from exc
+
+# POST /availability
+
+@app.post("/availability", response_model=AvailabilityResponse)
+async def get_availability_endpoint(req: AvailabilityRequest):
+    """
+    Calcula disponibilidad para un servicio.
+
+    No guarda datos en Mongo.
+    Solo calcula slots disponibles según:
+    - servicio
+    - staff asociado
+    - workingHours
+    - appointments existentes
+    """
+
+    try:
+        availability = await get_availability_slots(
+            service_id=req.serviceId,
+            target_date=req.targetDate,
+            start_date=req.startDate,
+            end_date=req.endDate,
+            staff_id=req.staffId,
+            business_id="1",
+        )
+
+        return availability
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while calculating availability.",
+        ) from exc
+
+
+# POST /appointments
+
+@app.post("/appointments", response_model=AppointmentResponse, status_code=201)
+async def create_appointment_endpoint(appointment: AppointmentCreateRequest):
+    """
+    Crea una reserva real en Mongo.
+
+    Nota:
+    En esta primera versión asumimos que el frontend envía un slot válido
+    previamente consultado desde /availability.
+    """
+
+    business_id = "1"
+    appointment_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    service = get_service_by_service_id(appointment.serviceId)
+
+    if not service:
+        raise HTTPException(
+            status_code=404,
+            detail="Service not found.",
+        )
+
+    document = {
+        "appointmentId": appointment_id,
+        "businessId": business_id,
+        "serviceId": appointment.serviceId,
+        "serviceName": service.get("name"),
+        "staffId": appointment.staffId,
+        "staffName": None,
+        "customerName": appointment.customerName,
+        "customerPhone": appointment.customerPhone,
+        "customerEmail": appointment.customerEmail,
+        "date": appointment.date,
+        "start": appointment.start,
+        "end": appointment.end,
+        "status": "scheduled",
+        "notes": appointment.notes,
+        "isDeleted": False,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    inserted_appointment = await create_appointment(document)
+
+    return inserted_appointment
+
+
+# GET /appointments
+
+@app.get("/appointments", response_model=AppointmentsListResponse)
+async def get_appointments_endpoint():
+    """
+    Lista reservas no eliminadas.
+    """
+
+    try:
+        appointments_data = await get_appointments_list()
+
+        return {
+            "items": appointments_data,
+            "total": len(appointments_data),
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving appointments.",
+        ) from exc
+
+
+# GET /appointments/{appointmentId}
+
+@app.get("/appointments/{appointmentId}", response_model=AppointmentResponse)
+async def get_appointment_endpoint(appointmentId: str):
+    """
+    Obtiene una reserva por appointmentId.
+    """
+
+    appointment = await get_appointment(appointmentId)
+
+    if not appointment:
+        raise HTTPException(
+            status_code=404,
+            detail="Appointment not found.",
+        )
+
+    return appointment
+
+
+# PATCH /appointments/{appointmentId}
+
+@app.patch("/appointments/{appointmentId}", response_model=AppointmentResponse)
+async def update_appointment_endpoint(
+    appointmentId: str,
+    appointment: AppointmentUpdateRequest,
+):
+    """
+    Actualiza parcialmente una reserva.
+    """
+
+    update_data = appointment.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+
+    updated_appointment = await update_appointment(appointmentId, update_data)
+
+    if not updated_appointment:
+        raise HTTPException(
+            status_code=404,
+            detail="Appointment not found.",
+        )
+
+    return updated_appointment
+
+
+# DELETE /appointments/{appointmentId}
+
+@app.delete("/appointments/{appointmentId}", response_model=AppointmentResponse)
+async def delete_appointment_endpoint(appointmentId: str):
+    """
+    Soft delete de una reserva.
+    """
+
+    deleted_appointment = await delete_appointment(appointmentId)
+
+    if not deleted_appointment:
+        raise HTTPException(
+            status_code=404,
+            detail="Appointment not found.",
+        )
+
+    return deleted_appointment

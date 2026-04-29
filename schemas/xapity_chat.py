@@ -8,11 +8,24 @@ from pydantic import BaseModel, Field
 
 
 class XapityIntentAnalysis(BaseModel):
-    intent: Literal["greeting", "farewell", "list_services", "unknown"] = Field(
+    intent: Literal[
+        "greeting",
+        "farewell",
+        "list_services",
+        "sales_total",
+        "unknown",
+    ] = Field(
         ...,
         description="Intención detectada a partir del mensaje del usuario",
-        examples=["greeting", "farewell", "list_services", "unknown"],
+        examples=[
+            "greeting",
+            "farewell",
+            "list_services",
+            "sales_total",
+            "unknown",
+        ],
     )
+    
     confidence: float = Field(
         ...,
         ge=0.0,
