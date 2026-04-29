@@ -17,7 +17,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "xapity_db")
 SERVICES_COLLECTION = os.getenv("SERVICES_COLLECTION", "services")
 STAFF_COLLECTION = os.getenv("STAFF_COLLECTION", "staff")
-
+APPOINTMENTS_COLLECTION = os.getenv("APPOINTMENTS_COLLECTION", "appointments")
 
 _client: Optional[MongoClient] = None
 
@@ -56,6 +56,12 @@ def get_staff_collection() -> Collection:
     db = get_database()
     return db[STAFF_COLLECTION]
 
+def get_appointments_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for appointments.
+    """
+    db = get_database()
+    return db[APPOINTMENTS_COLLECTION]
 
 def serialize_mongo_document(document: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -270,3 +276,132 @@ def get_staff(
 
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving staff from MongoDB.") from exc
+
+def insert_appointment(appointment_document: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inserts an appointment document into MongoDB and returns the inserted document.
+    """
+    try:
+        collection = get_appointments_collection()
+
+        result = collection.insert_one(appointment_document)
+
+        inserted_document = collection.find_one({"_id": result.inserted_id})
+        if not inserted_document:
+            raise RuntimeError("Appointment was inserted but could not be retrieved.")
+
+        return serialize_mongo_document(inserted_document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error inserting appointment into MongoDB.") from exc
+
+
+def get_appointments(
+    *,
+    include_deleted: bool = False,
+    business_id: Optional[str] = None,
+    staff_id: Optional[str] = None,
+    service_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves appointments from MongoDB.
+    """
+    try:
+        collection = get_appointments_collection()
+
+        query: Dict[str, Any] = {}
+
+        if not include_deleted:
+            query["isDeleted"] = False
+
+        if business_id is not None:
+            query["businessId"] = business_id
+
+        if staff_id is not None:
+            query["staffId"] = staff_id
+
+        if service_id is not None:
+            query["serviceId"] = service_id
+
+        documents = collection.find(query).sort("createdAt", -1)
+
+        return [serialize_mongo_document(doc) for doc in documents]
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving appointments from MongoDB.") from exc
+
+
+def get_appointment_by_appointment_id(
+    appointment_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a single appointment by appointmentId.
+    """
+    try:
+        collection = get_appointments_collection()
+
+        document = collection.find_one(
+            {"appointmentId": appointment_id, "isDeleted": False}
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving appointment by appointmentId.") from exc
+
+
+def update_appointment_by_appointment_id(
+    appointment_id: str,
+    update_fields: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates an appointment by appointmentId and returns the updated document.
+    """
+    try:
+        collection = get_appointments_collection()
+
+        document = collection.find_one_and_update(
+            {"appointmentId": appointment_id, "isDeleted": False},
+            {"$set": update_fields},
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error updating appointment by appointmentId.") from exc
+
+
+def soft_delete_appointment_by_appointment_id(
+    appointment_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Soft deletes an appointment by appointmentId and returns the updated document.
+    """
+    try:
+        collection = get_appointments_collection()
+
+        document = collection.find_one_and_update(
+            {"appointmentId": appointment_id, "isDeleted": False},
+            {
+                "$set": {
+                    "isDeleted": True,
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error soft deleting appointment by appointmentId.") from exc
