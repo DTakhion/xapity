@@ -63,12 +63,12 @@ class ServiceResponse(BaseModel):
     _id: Optional[str] = None
 
     # OPERATIVOS
-    durationMinutes: int
-    basePrice: int
+    durationMinutes: int = 60
+    basePrice: int = 0
     beforeCareInstructions: Optional[str] = None
     afterCareInstructions: Optional[str] = None
-    isBookableOnline: bool
-
+    isBookableOnline: bool = True
+    
     # COMERCIALES
     # AJUSTADO:
     # Se usa default_factory=list en vez de []
