@@ -16,6 +16,7 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "xapity_db")
 SERVICES_COLLECTION = os.getenv("SERVICES_COLLECTION", "services")
+STAFF_COLLECTION = os.getenv("STAFF_COLLECTION", "staff")
 
 
 _client: Optional[MongoClient] = None
@@ -47,6 +48,13 @@ def get_services_collection() -> Collection:
     """
     db = get_database()
     return db[SERVICES_COLLECTION]
+
+def get_staff_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for staff.
+    """
+    db = get_database()
+    return db[STAFF_COLLECTION]
 
 
 def serialize_mongo_document(document: Dict[str, Any]) -> Dict[str, Any]:
@@ -208,3 +216,47 @@ def soft_delete_service_by_service_id(service_id: str) -> Optional[Dict[str, Any
 
     except PyMongoError as exc:
         raise RuntimeError("Error soft deleting service by serviceId.") from exc
+
+def insert_staff(staff_document: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inserts a staff document into MongoDB and returns the inserted document.
+    """
+    try:
+        collection = get_staff_collection()
+
+        result = collection.insert_one(staff_document)
+
+        inserted_document = collection.find_one({"_id": result.inserted_id})
+        if not inserted_document:
+            raise RuntimeError("Staff was inserted but could not be retrieved.")
+
+        return serialize_mongo_document(inserted_document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error inserting staff into MongoDB.") from exc
+
+def get_staff(
+    *,
+    include_deleted: bool = False,
+    only_active: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves staff from MongoDB.
+    """
+    try:
+        collection = get_staff_collection()
+
+        query: Dict[str, Any] = {}
+
+        if not include_deleted:
+            query["isDeleted"] = False
+
+        if only_active is not None:
+            query["isActive"] = only_active
+
+        documents = collection.find(query).sort("createdAt", -1)
+
+        return [serialize_mongo_document(doc) for doc in documents]
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving staff from MongoDB.") from exc

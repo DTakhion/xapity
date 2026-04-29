@@ -8,15 +8,20 @@ from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
-#Revisar
-#Agregado por Felipe para el uso del codigo staff.py que se encuentra en schemas
-from schemas.staff import StaffCreate, StaffResponse
-from services.staff_service import create_staff
+# Esta es la importanción correcta para los endpoints de Staff
+from schemas.staff import StaffCreateRequest, StaffResponse
+from services.staff_repo import create_staff, get_staff_list
 
 
-@app.post("/staff", response_model=StaffResponse)
-def create_staff_endpoint(staff: StaffCreate):
-    return create_staff(staff.dict())
+# @app.post("/staff", response_model=StaffResponse)
+# def create_staff_endpoint(staff: StaffCreate):
+#     return create_staff(staff.dict())
+# Comentarios:
+# Este endpoint fue movido porque estaba definido antes de app = FastAPI(...).
+# Además se ajustó para seguir la arquitectura del proyecto:
+# endpoint -> staff_repo.py -> mongo_persistence.py -> MongoDB.
+# También se reemplazó StaffCreate por StaffCreateRequest para mantener
+# consistencia con ServiceCreateRequest.
 
 # NUEVO:
 # Se construyo schemas/service.py central del proyecto en vez de redefinir otro BaseModel local.
@@ -386,3 +391,64 @@ async def xapity_chat_endpoint(
         data=None,
         metadata=metadata,
     )
+
+# POST /staff
+
+@app.post("/staff", response_model=StaffResponse, status_code=201)
+async def create_staff_endpoint(staff: StaffCreateRequest):
+    """
+    Crea un nuevo miembro del staff.
+
+    Flujo:
+    1. Valida el body con StaffCreateRequest
+    2. Genera staffId, businessId y timestamps
+    3. Persiste el documento en Mongo
+    4. Retorna el documento insertado
+    """
+
+    business_id = "1"
+    staff_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    document = {
+        "staffId": staff_id,
+        "businessId": business_id,
+        "name": staff.name,
+        "role": staff.role,
+        "email": staff.email,
+        "phone": staff.phone,
+        "specialties": staff.specialties,
+        "serviceIds": staff.serviceIds,
+        "notes": staff.notes,
+        "workingHours": staff.workingHours.model_dump() if staff.workingHours else None,
+        "isActive": True,
+        "isDeleted": False,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    inserted_staff = await create_staff(document)
+
+    return inserted_staff
+
+# GET /staff
+
+@app.get("/staff")
+async def get_staff_endpoint():
+    """
+    Obtiene el listado de staff no eliminado.
+    """
+
+    try:
+        staff_data = await get_staff_list()
+
+        return {
+            "items": staff_data,
+            "total": len(staff_data)
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving staff."
+        ) from exc
