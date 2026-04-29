@@ -72,9 +72,15 @@ def serialize_mongo_document(document: Dict[str, Any]) -> Dict[str, Any]:
     return serialized
 
 
+   
 def insert_service(service_document: Dict[str, Any]) -> Dict[str, Any]:
     """
     Inserts a service document into MongoDB and returns the inserted document.
+
+    Nota:
+    El documento ya viene validado desde schemas/service.py y construido
+    desde api/main.py. Esta capa no filtra campos, por lo que soporta
+    nuevos atributos operativos/comerciales sin cambios adicionales.
     """
     try:
         collection = get_services_collection()
@@ -173,6 +179,10 @@ def update_service_by_service_id(
 ) -> Optional[Dict[str, Any]]:
     """
     Updates a service by serviceId and returns the updated document.
+
+    Nota:
+    update_fields puede incluir campos base, operativos o comerciales.
+    La validación de campos permitidos debe ocurrir en la capa schema/API.
     """
     try:
         collection = get_services_collection()

@@ -202,6 +202,15 @@ async def create_service_endpoint(service: ServiceCreateRequest):
         "isDeleted": False,
         "createdAt": now,
         "updatedAt": now,
+        #OPERATIVOS------------------------------
+        "durationMinutes": service.durationMinutes,
+        "basePrice": service.basePrice,
+        "beforeCareInstructions": service.beforeCareInstructions,
+        "afterCareInstructions": service.afterCareInstructions,
+        "isBookableOnline": service.isBookableOnline,
+        #COMERCIALES-----------------------------
+        "includes": service.includes,
+        "products": service.products,
     }
 
     # AJUSTADO:
@@ -277,7 +286,7 @@ async def update_service_endpoint(serviceId: str, service: ServiceUpdateRequest)
     if not update_data:
         raise HTTPException(
             status_code=400,
-            detail="Sin campos para actaulizar."
+            detail="Sin campos para actualizar."
         )
 
     business_id = existing_service["businessId"]
