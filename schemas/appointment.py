@@ -12,7 +12,10 @@ class AppointmentCreateRequest(BaseModel):
     """
     Request para crear una reserva/agendamiento real.
 
-    Esta entidad sí se guarda en Mongo.
+    Importante:
+    - El frontend solo envía date + start.
+    - El backend calcula end usando durationMinutes del servicio.
+    - Esta entidad sí se guarda en Mongo.
     """
 
     serviceId: str = Field(..., min_length=1)
@@ -24,7 +27,6 @@ class AppointmentCreateRequest(BaseModel):
 
     date: date
     start: str = Field(..., min_length=5, max_length=5)
-    end: str = Field(..., min_length=5, max_length=5)
 
     notes: Optional[str] = None
 
@@ -34,6 +36,11 @@ class AppointmentUpdateRequest(BaseModel):
     Request para actualización parcial de una reserva.
 
     None = no modificar.
+
+    Nota:
+    - En creación, end lo calcula backend.
+    - En actualización, por ahora mantenemos start/end opcionales
+      para permitir ajustes administrativos.
     """
 
     serviceId: Optional[str] = Field(None, min_length=1)

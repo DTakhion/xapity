@@ -13,6 +13,7 @@ class XapityIntentAnalysis(BaseModel):
         "farewell",
         "list_services",
         "sales_total",
+        "create_appointment",
         "unknown",
     ] = Field(
         ...,
@@ -22,6 +23,7 @@ class XapityIntentAnalysis(BaseModel):
             "farewell",
             "list_services",
             "sales_total",
+            "create_appointment",
             "unknown",
         ],
     )
