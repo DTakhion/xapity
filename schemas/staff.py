@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 # ============================================================
@@ -51,35 +51,112 @@ class WorkingBlock(BaseModel):
     start: str
     end: str
 
+    @field_validator("start", "end")
+    @classmethod
+    def validate_hh_mm(cls, value: str) -> str:
+        """
+        Valida que las horas vengan en formato HH:MM.
+        Evita valores placeholder de Swagger como 'string'.
+        """
+
+        try:
+            datetime.strptime(value, "%H:%M")
+        except ValueError:
+            raise ValueError("La hora debe venir en formato HH:MM, por ejemplo '09:00'.")
+
+        return value
+
+    @model_validator(mode="after")
+    def validate_start_before_end(self):
+        """
+        Valida que el bloque tenga sentido horario:
+        start debe ser menor que end.
+        """
+
+        start_time = datetime.strptime(self.start, "%H:%M").time()
+        end_time = datetime.strptime(self.end, "%H:%M").time()
+
+        if start_time >= end_time:
+            raise ValueError("La hora start debe ser menor que la hora end.")
+
+        return self
+
 
 class WorkingDay(BaseModel):
     """
     Representa la disponibilidad de un día específico.
 
-    Permite:
-    - marcar si ese día trabaja o no
-    - definir una o más ventanas horarias
+    Reglas:
+    - Si isWorking=False, se limpian los bloques automáticamente.
+    - Si isWorking=True, debe existir al menos un bloque válido.
+    - Los bloques no pueden solaparse.
     """
 
-    isWorking: bool = True
+    isWorking: bool = False
     blocks: List[WorkingBlock] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def clean_blocks_when_not_working(cls, data):
+        """
+        Limpia bloques cuando el día no es laboral.
+
+        Esto evita errores típicos de Swagger/frontend como:
+        {
+            "isWorking": false,
+            "blocks": [{"start": "string", "end": "string"}]
+        }
+        """
+
+        if isinstance(data, dict) and data.get("isWorking") is False:
+            data["blocks"] = []
+
+        return data
+
+    @model_validator(mode="after")
+    def validate_working_day_consistency(self):
+        """
+        Valida consistencia semántica del día laboral.
+        """
+
+        if self.isWorking and not self.blocks:
+            raise ValueError(
+                "Si isWorking es true, debe existir al menos un bloque horario."
+            )
+
+        sorted_blocks = sorted(
+            self.blocks,
+            key=lambda block: datetime.strptime(block.start, "%H:%M").time(),
+        )
+
+        for previous_block, current_block in zip(sorted_blocks, sorted_blocks[1:]):
+            previous_end = datetime.strptime(previous_block.end, "%H:%M").time()
+            current_start = datetime.strptime(current_block.start, "%H:%M").time()
+
+            if current_start < previous_end:
+                raise ValueError(
+                    "Los bloques horarios no pueden solaparse dentro del mismo día."
+                )
+
+        self.blocks = sorted_blocks
+        return self
 
 
 class WorkingHours(BaseModel):
     """
     Representa la disponibilidad semanal del staff.
 
-    Cada día es opcional. Si un día viene en None,
-    se interpreta como no definido todavía.
+    Cada día queda definido por defecto como no laboral.
+    Esto evita None y evita placeholders tipo 'string'.
     """
 
-    monday: Optional[WorkingDay] = None
-    tuesday: Optional[WorkingDay] = None
-    wednesday: Optional[WorkingDay] = None
-    thursday: Optional[WorkingDay] = None
-    friday: Optional[WorkingDay] = None
-    saturday: Optional[WorkingDay] = None
-    sunday: Optional[WorkingDay] = None
+    monday: WorkingDay = Field(default_factory=WorkingDay)
+    tuesday: WorkingDay = Field(default_factory=WorkingDay)
+    wednesday: WorkingDay = Field(default_factory=WorkingDay)
+    thursday: WorkingDay = Field(default_factory=WorkingDay)
+    friday: WorkingDay = Field(default_factory=WorkingDay)
+    saturday: WorkingDay = Field(default_factory=WorkingDay)
+    sunday: WorkingDay = Field(default_factory=WorkingDay)
 
 
 # Entrada

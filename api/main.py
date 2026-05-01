@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import re
 from typing import Optional, Any, Dict
 from pathlib import Path
 from dotenv import load_dotenv
@@ -66,7 +67,8 @@ from schemas.xapity_chat import (
     XapityResponseMetadata,
 )
 
-from services.xapity_service import detect_xapity_intent, build_xapity_reply
+#from services.xapity_service import detect_xapity_intent, build_xapity_reply
+from services.xapity_service import detect_xapity_intent, build_xapity_reply, normalize_message
 
 from services.sales_service import get_sales_total_for_period
 
@@ -378,6 +380,93 @@ def get_previous_month_range(today: date | None = None) -> tuple[date, date]:
 def format_clp(value: float) -> str:
     return f"${int(round(value)):,.0f}".replace(",", ".")
 
+def get_next_weekday(target_weekday: int, today: date | None = None) -> date:
+    """
+    Retorna la próxima fecha para un día de la semana.
+    Monday=0 ... Sunday=6.
+    """
+    today = today or date.today()
+    days_ahead = target_weekday - today.weekday()
+
+    if days_ahead < 0:
+        days_ahead += 7
+
+    return today + timedelta(days=days_ahead)
+
+
+def extract_requested_date_from_message(message: str) -> date | None:
+    normalized = normalize_message(message)
+
+    weekday_map = {
+        "lunes": 0,
+        "martes": 1,
+        "miercoles": 2,
+        "jueves": 3,
+        "viernes": 4,
+        "sabado": 5,
+        "domingo": 6,
+    }
+
+    if "hoy" in normalized:
+        return date.today()
+
+    if "manana" in normalized:
+        return date.today() + timedelta(days=1)
+
+    for word, weekday in weekday_map.items():
+        if word in normalized:
+            return get_next_weekday(weekday)
+
+    return None
+
+
+def extract_requested_time_from_message(message: str) -> str | None:
+    normalized = normalize_message(message)
+
+    # Casos: 10:00, 09:30, 15:45
+    match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", normalized)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        return f"{hour:02d}:{minute:02d}"
+
+    # Casos: 10am, 10 am, 3pm, 3 pm
+    match = re.search(r"\b(\d{1,2})\s*(am|pm)\b", normalized)
+    if match:
+        hour = int(match.group(1))
+        meridian = match.group(2)
+
+        if meridian == "pm" and hour < 12:
+            hour += 12
+
+        if meridian == "am" and hour == 12:
+            hour = 0
+
+        return f"{hour:02d}:00"
+
+    # Caso simple MVP: "a las 10"
+    match = re.search(r"\ba las (\d{1,2})\b", normalized)
+    if match:
+        hour = int(match.group(1))
+
+        if 0 <= hour <= 23:
+            return f"{hour:02d}:00"
+
+    return None
+
+
+async def find_service_from_message(message: str) -> Dict[str, Any] | None:
+    normalized = normalize_message(message)
+    services_data = await get_services_list()
+
+    for service in services_data:
+        service_name = normalize_message(service.get("name", ""))
+
+        if service_name and service_name in normalized:
+            return service
+
+    return None
+
 # POST /xapity/chat
 
 @app.post("/xapity/chat", response_model=XapityChatResponse)
@@ -423,7 +512,123 @@ async def xapity_chat_endpoint(
                 },
             ) from exc
     
-    # 4. Caso: total de ventas / ingresos por venta
+    # 4. Caso: crear agenda / appointment
+    if analysis.intent == "create_appointment":
+        try:
+            business_id = "1"
+
+            service = await find_service_from_message(req.message)
+            requested_date = extract_requested_date_from_message(req.message)
+            requested_start = extract_requested_time_from_message(req.message)
+
+            if not service or not requested_date or not requested_start:
+                return XapityChatResponse(
+                    request_id=request_id,
+                    message=req.message,
+                    analysis=analysis,
+                    reply=(
+                        "Puedo ayudarte a agendar, pero necesito identificar claramente "
+                        "el servicio, el día y la hora. Por ejemplo: "
+                        "'Necesito agendar corte de pelo para el lunes a las 10am'."
+                    ),
+                    data={
+                        "missing": {
+                            "service": service is None,
+                            "date": requested_date is None,
+                            "time": requested_start is None,
+                        }
+                    },
+                    metadata=metadata,
+                )
+
+            availability = await get_availability_slots(
+                service_id=service["serviceId"],
+                target_date=requested_date,
+                start_date=None,
+                end_date=None,
+                staff_id=None,
+                business_id=business_id,
+            )
+
+            matching_slot = None
+
+            for slot in availability.get("availableSlots", []):
+                if slot.get("start") == requested_start:
+                    matching_slot = slot
+                    break
+
+            if not matching_slot:
+                return XapityChatResponse(
+                    request_id=request_id,
+                    message=req.message,
+                    analysis=analysis,
+                    reply=(
+                        f"No encontré disponibilidad para {service['name']} "
+                        f"el {requested_date.isoformat()} a las {requested_start}. "
+                        "Puedes intentar con otro horario."
+                    ),
+                    data={
+                        "service": service,
+                        "requestedDate": requested_date.isoformat(),
+                        "requestedStart": requested_start,
+                        "availableSlots": availability.get("availableSlots", []),
+                        "totalAvailableSlots": availability.get("total", 0),
+                    },
+                    metadata=metadata,
+                )
+
+            now = datetime.now(timezone.utc)
+            appointment_id = str(uuid.uuid4())
+
+            document = {
+                "appointmentId": appointment_id,
+                "businessId": business_id,
+                "serviceId": matching_slot["serviceId"],
+                "serviceName": matching_slot["serviceName"],
+                "staffId": matching_slot["staffId"],
+                "staffName": matching_slot["staffName"],
+                "customerName": "Cliente Xapity",
+                "customerPhone": None,
+                "customerEmail": None,
+                #"date": matching_slot["date"],
+                "date": matching_slot["date"].isoformat()
+                if hasattr(matching_slot["date"], "isoformat")
+                else matching_slot["date"],
+                "start": matching_slot["start"],
+                "end": matching_slot["end"],
+                "status": "scheduled",
+                "notes": f"Reserva creada desde conversación: {req.message}",
+                "isDeleted": False,
+                "createdAt": now,
+                "updatedAt": now,
+            }
+
+            inserted_appointment = await create_appointment(document)
+
+            return XapityChatResponse(
+                request_id=request_id,
+                message=req.message,
+                analysis=analysis,
+                reply=(
+                    f"Listo, agendé {matching_slot['serviceName']} "
+                    f"con {matching_slot['staffName']} para el "
+                    f"{requested_date.isoformat()} de "
+                    f"{matching_slot['start']} a {matching_slot['end']}."
+                ),
+                data=inserted_appointment,
+                metadata=metadata,
+            )
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "xapity_create_appointment_failed",
+                    "request_id": request_id,
+                },
+            ) from exc
+    
+    # 5. Caso: total de ventas / ingresos por venta
     if analysis.intent == "sales_total":
         try:
             # MVP:
@@ -477,7 +682,7 @@ async def xapity_chat_endpoint(
                 },
             ) from exc
 
-    # 5. Caso: resto de intenciones
+    # 6. Caso: resto de intenciones
     return XapityChatResponse(
         request_id=request_id,
         message=req.message,
@@ -595,9 +800,9 @@ async def create_appointment_endpoint(appointment: AppointmentCreateRequest):
     """
     Crea una reserva real en Mongo.
 
-    Nota:
-    En esta primera versión asumimos que el frontend envía un slot válido
-    previamente consultado desde /availability.
+    Reglas:
+    - El frontend envía date + start.
+    - El backend calcula end usando durationMinutes del servicio.
     """
 
     business_id = "1"
@@ -612,6 +817,25 @@ async def create_appointment_endpoint(appointment: AppointmentCreateRequest):
             detail="Service not found.",
         )
 
+    duration_minutes = service.get("durationMinutes")
+
+    if not duration_minutes:
+        raise HTTPException(
+            status_code=400,
+            detail="Service does not have durationMinutes configured.",
+        )
+
+    try:
+        start_time = datetime.strptime(appointment.start, "%H:%M")
+        end_time = start_time + timedelta(minutes=int(duration_minutes))
+        calculated_end = end_time.strftime("%H:%M")
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Start time must use HH:MM format, for example '09:00'.",
+        ) from exc
+
     document = {
         "appointmentId": appointment_id,
         "businessId": business_id,
@@ -622,9 +846,10 @@ async def create_appointment_endpoint(appointment: AppointmentCreateRequest):
         "customerName": appointment.customerName,
         "customerPhone": appointment.customerPhone,
         "customerEmail": appointment.customerEmail,
-        "date": appointment.date,
+        #"date": appointment.date,
+        "date": appointment.date.isoformat(),
         "start": appointment.start,
-        "end": appointment.end,
+        "end": calculated_end,
         "status": "scheduled",
         "notes": appointment.notes,
         "isDeleted": False,

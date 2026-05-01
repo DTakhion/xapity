@@ -12,8 +12,16 @@ from services.ollama_client import generate
 
 INTENT_MODEL_TEMPERATURE = 0.0
 
-ALLOWED_INTENTS = {"greeting", "farewell", "list_services", "sales_total", "unknown"}
+ALLOWED_INTENTS = {
+    "greeting",
+    "farewell",
+    "list_services",
+    "sales_total",
+    "create_appointment",
+    "unknown",
+}
 
+#ALLOWED_INTENTS = {"greeting", "farewell", "list_services", "sales_total", "unknown"}
 
 def normalize_message(text: str) -> str:
     """
@@ -125,6 +133,28 @@ def detect_intent_fastpath(message: str) -> XapityIntentAnalysis | None:
             has_noise=False,
             needs_clarification=False,
         )
+    
+    appointment_keywords = {
+        "agendar",
+        "agenda",
+        "reservar",
+        "reserva",
+        "tomar hora",
+        "pedir hora",
+        "necesito hora",
+        "quiero una hora",
+        "programar",
+        "cita",
+    }
+
+    if any(keyword in normalized for keyword in appointment_keywords):
+        return XapityIntentAnalysis(
+            intent="create_appointment",
+            confidence=0.9,
+            is_ambiguous=False,
+            has_noise=False,
+            needs_clarification=False,
+        )
 
     return None
 
@@ -147,6 +177,7 @@ Intenciones permitidas:
 - farewell
 - list_services
 - sales_total
+- create_appointment
 - unknown
 
 Definiciones:
@@ -182,7 +213,15 @@ Definiciones:
    - total de ventas del mes pasado
    - ingresos por ventas entre el 1 y el 31 de marzo
 
-5. Usa "unknown" cuando el mensaje sea realmente ambiguo, incoherente, demasiado ruidoso
+5. Usa "create_appointment" cuando el usuario quiera agendar, reservar,
+   tomar una hora, pedir una cita o programar un servicio.
+   Ejemplos:
+   - necesito agendar un servicio para el lunes a las 10
+   - quiero reservar un corte de pelo mañana a las 15:00
+   - puedo tomar una hora para manicure
+   - agenda limpieza facial para el viernes
+
+6. Usa "unknown" cuando el mensaje sea realmente ambiguo, incoherente, demasiado ruidoso
    o no exprese una intención razonablemente inferible.
 
 Criterios importantes:
@@ -194,7 +233,7 @@ Criterios importantes:
 
 Debes devolver exactamente este formato JSON:
 {
-  "intent": "greeting | farewell | list_services | sales_total | unknown",
+  "intent": "greeting | farewell | list_services | sales_total | create_appointment | unknown",
   "confidence": 0.0,
   "is_ambiguous": false,
   "has_noise": false,
@@ -257,7 +296,7 @@ def parse_intent_response(raw_text: str) -> XapityIntentAnalysis:
         confidence = min(confidence, 0.4)
         needs_clarification = True
 
-    if intent in {"greeting", "farewell", "list_services", "sales_total"}:
+    if intent in {"greeting", "farewell", "list_services", "sales_total", "create_appointment"}:
         is_ambiguous = False if confidence >= 0.7 else is_ambiguous
         has_noise = False if confidence >= 0.7 else has_noise
         needs_clarification = False if confidence >= 0.7 else needs_clarification
@@ -374,6 +413,9 @@ def build_xapity_reply(analysis: XapityIntentAnalysis, total: int | None = None)
     
     if analysis.intent == "sales_total":
         return "Claro, puedo consultar el monto total de ingresos por ventas para el periodo solicitado."
+    
+    if analysis.intent == "create_appointment":
+        return "Perfecto, puedo ayudarte a agendar. Necesito identificar el servicio, la fecha y la hora solicitada."
 
     return (
         "No logré entender bien tu solicitud. "
