@@ -18,6 +18,7 @@ ALLOWED_INTENTS = {
     "list_services",
     "sales_total",
     "create_appointment",
+    "staff_by_service",
     "unknown",
 }
 
@@ -54,12 +55,14 @@ def detect_intent_fastpath(message: str) -> XapityIntentAnalysis | None:
 
     greeting_aliases = {
         "hola",
+        "hola xapity",
         "buenas",
         "buenos dias",
         "buen dia",
         "buenas tardes",
         "buenas noches",
         "holi",
+        "holo"
         "hello",
         "hi",
     }
@@ -67,6 +70,7 @@ def detect_intent_fastpath(message: str) -> XapityIntentAnalysis | None:
     farewell_aliases = {
         "chao",
         "adios",
+        "adios xapity",
         "nos vemos",
         "hasta luego",
         "hasta pronto",
@@ -103,8 +107,8 @@ def detect_intent_fastpath(message: str) -> XapityIntentAnalysis | None:
             has_noise=False,
             needs_clarification=False,
         )
-
-    if normalized in list_services_aliases:
+    
+    if any(alias in normalized for alias in list_services_aliases):
         return XapityIntentAnalysis(
             intent="list_services",
             confidence=0.98,
@@ -128,6 +132,29 @@ def detect_intent_fastpath(message: str) -> XapityIntentAnalysis | None:
     if any(keyword in normalized for keyword in sales_keywords):
         return XapityIntentAnalysis(
             intent="sales_total",
+            confidence=0.9,
+            is_ambiguous=False,
+            has_noise=False,
+            needs_clarification=False,
+        )
+    
+    staff_by_service_keywords = {
+        "que staff tienes para",
+        "que profesionales tienes para",
+        "quien atiende",
+        "quienes atienden",
+        "que persona atiende",
+        "que personas atienden",
+        "que especialista atiende",
+        "que especialistas atienden",
+        "staff para",
+        "profesionales para",
+        "especialistas para",
+    }
+
+    if any(keyword in normalized for keyword in staff_by_service_keywords):
+        return XapityIntentAnalysis(
+            intent="staff_by_service",
             confidence=0.9,
             is_ambiguous=False,
             has_noise=False,
@@ -178,6 +205,7 @@ Intenciones permitidas:
 - list_services
 - sales_total
 - create_appointment
+- staff_by_service
 - unknown
 
 Definiciones:
@@ -221,7 +249,15 @@ Definiciones:
    - puedo tomar una hora para manicure
    - agenda limpieza facial para el viernes
 
-6. Usa "unknown" cuando el mensaje sea realmente ambiguo, incoherente, demasiado ruidoso
+6. Usa "staff_by_service" cuando el usuario quiera saber qué personas,
+   profesionales, especialistas o miembros del staff atienden un servicio específico.
+   Ejemplos:
+   - qué staff tienes para biopsia clínica
+   - quién atiende limpieza facial
+   - qué profesionales hacen manicure
+   - especialistas para depilación láser
+
+7. Usa "unknown" cuando el mensaje sea realmente ambiguo, incoherente, demasiado ruidoso
    o no exprese una intención razonablemente inferible.
 
 Criterios importantes:
@@ -233,7 +269,7 @@ Criterios importantes:
 
 Debes devolver exactamente este formato JSON:
 {
-  "intent": "greeting | farewell | list_services | sales_total | create_appointment | unknown",
+  "intent": "greeting | farewell | list_services | sales_total | create_appointment | staff_by_service | unknown",
   "confidence": 0.0,
   "is_ambiguous": false,
   "has_noise": false,
@@ -296,7 +332,7 @@ def parse_intent_response(raw_text: str) -> XapityIntentAnalysis:
         confidence = min(confidence, 0.4)
         needs_clarification = True
 
-    if intent in {"greeting", "farewell", "list_services", "sales_total", "create_appointment"}:
+    if intent in {"greeting", "farewell", "list_services", "sales_total", "create_appointment", "staff_by_service"}:
         is_ambiguous = False if confidence >= 0.7 else is_ambiguous
         has_noise = False if confidence >= 0.7 else has_noise
         needs_clarification = False if confidence >= 0.7 else needs_clarification
@@ -416,6 +452,9 @@ def build_xapity_reply(analysis: XapityIntentAnalysis, total: int | None = None)
     
     if analysis.intent == "create_appointment":
         return "Perfecto, puedo ayudarte a agendar. Necesito identificar el servicio, la fecha y la hora solicitada."
+    
+    if analysis.intent == "staff_by_service":
+        return "Claro, puedo revisar qué integrantes del staff atienden ese servicio."
 
     return (
         "No logré entender bien tu solicitud. "
