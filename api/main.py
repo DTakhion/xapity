@@ -394,8 +394,68 @@ def get_next_weekday(target_weekday: int, today: date | None = None) -> date:
     return today + timedelta(days=days_ahead)
 
 
+# def extract_requested_date_from_message(message: str) -> date | None:
+#     normalized = normalize_message(message)
+
+#     weekday_map = {
+#         "lunes": 0,
+#         "martes": 1,
+#         "miercoles": 2,
+#         "jueves": 3,
+#         "viernes": 4,
+#         "sabado": 5,
+#         "domingo": 6,
+#     }
+
+#     if "hoy" in normalized:
+#         return date.today()
+
+#     if "manana" in normalized:
+#         return date.today() + timedelta(days=1)
+
+#     for word, weekday in weekday_map.items():
+#         if word in normalized:
+#             return get_next_weekday(weekday)
+
+#     return None
+
 def extract_requested_date_from_message(message: str) -> date | None:
+    """
+    Extrae una fecha desde el mensaje del usuario.
+
+    Soporta:
+    - hoy
+    - mañana
+    - lunes, martes, miércoles...
+    - lunes 11 de mayo
+    - 11 de mayo
+    - 11/05
+    - 11-05
+
+    MVP:
+    - Si no viene año, usa el año actual.
+    """
+
     normalized = normalize_message(message)
+
+    today = date.today()
+    current_year = today.year
+
+    month_map = {
+        "enero": 1,
+        "febrero": 2,
+        "marzo": 3,
+        "abril": 4,
+        "mayo": 5,
+        "junio": 6,
+        "julio": 7,
+        "agosto": 8,
+        "septiembre": 9,
+        "setiembre": 9,
+        "octubre": 10,
+        "noviembre": 11,
+        "diciembre": 12,
+    }
 
     weekday_map = {
         "lunes": 0,
@@ -408,14 +468,45 @@ def extract_requested_date_from_message(message: str) -> date | None:
     }
 
     if "hoy" in normalized:
-        return date.today()
+        return today
 
     if "manana" in normalized:
-        return date.today() + timedelta(days=1)
+        return today + timedelta(days=1)
 
+    # Caso: "lunes 11 de mayo", "11 de mayo", "lunes 11 mayo"
+    month_names = "|".join(month_map.keys())
+
+    match = re.search(
+        rf"(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)?\s*"
+        rf"\b(\d{{1,2}})\s*(?:de\s*)?({month_names})\b",
+        normalized,
+    )
+
+    if match:
+        day = int(match.group(1))
+        month = month_map[match.group(2)]
+
+        try:
+            return date(current_year, month, day)
+        except ValueError:
+            return None
+
+    # Caso: "11/05" o "11-05"
+    match = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", normalized)
+
+    if match:
+        day = int(match.group(1))
+        month = int(match.group(2))
+
+        try:
+            return date(current_year, month, day)
+        except ValueError:
+            return None
+
+    # Caso: "lunes", "martes", etc.
     for word, weekday in weekday_map.items():
         if word in normalized:
-            return get_next_weekday(weekday)
+            return get_next_weekday(weekday, today=today)
 
     return None
 
@@ -467,6 +558,44 @@ async def find_service_from_message(message: str) -> Dict[str, Any] | None:
 
     return None
 
+def extract_service_query_from_staff_message(message: str) -> str:
+    """
+    Extrae una aproximación del nombre del servicio desde frases como:
+    - qué staff tienes para biopsia clínica
+    - quién atiende mantenimiento de robots
+    """
+    normalized = normalize_message(message)
+
+    patterns = [
+        r"staff tienes para (.+)",
+        r"staff para (.+)",
+        r"profesionales tienes para (.+)",
+        r"profesionales para (.+)",
+        r"especialistas para (.+)",
+        r"quien atiende (.+)",
+        r"quienes atienden (.+)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            return match.group(1).strip()
+
+    return normalized
+
+
+async def find_staff_by_service_id(service_id: str) -> list[Dict[str, Any]]:
+    """
+    Busca staff activo/no eliminado asociado a un serviceId.
+    """
+    staff_data = await get_staff_list()
+
+    return [
+        staff_member
+        for staff_member in staff_data
+        if service_id in (staff_member.get("serviceIds") or [])
+    ]
+
 # POST /xapity/chat
 
 @app.post("/xapity/chat", response_model=XapityChatResponse)
@@ -512,7 +641,237 @@ async def xapity_chat_endpoint(
                 },
             ) from exc
     
-    # 4. Caso: crear agenda / appointment
+    # 4. Caso: consultar staff por servicio
+    if analysis.intent == "staff_by_service":
+        try:
+            business_id = "1"
+
+            service = await find_service_from_message(req.message)
+
+            if not service:
+                service_query = extract_service_query_from_staff_message(req.message)
+
+                return XapityChatResponse(
+                    request_id=request_id,
+                    message=req.message,
+                    analysis=analysis,
+                    reply=(
+                        f"No encontré un servicio llamado '{service_query}'. "
+                        "Puedes revisar los servicios disponibles o escribir el nombre del servicio con más detalle."
+                    ),
+                    data={
+                        "serviceFound": False,
+                        "serviceQuery": service_query,
+                    },
+                    metadata=metadata,
+                )
+
+            # =====================================================
+            # NUEVO:
+            # Si el usuario además entrega día y hora, no respondemos
+            # solo staff asociado al servicio.
+            # Respondemos staff realmente disponible en ese horario.
+            #
+            # Ejemplos:
+            # - qué staff tienes para mantenimiento de robots el lunes a las 10
+            # - qué profesionales tienes para biopsia clínica mañana a las 15:00
+            # =====================================================
+            requested_date = extract_requested_date_from_message(req.message)
+            requested_start = extract_requested_time_from_message(req.message)
+
+            if requested_date and requested_start:
+                availability = await get_availability_slots(
+                    service_id=service["serviceId"],
+                    target_date=requested_date,
+                    start_date=None,
+                    end_date=None,
+                    staff_id=None,
+                    business_id=business_id,
+                )
+
+                matching_slots = [
+                    slot
+                    for slot in availability.get("availableSlots", [])
+                    if slot.get("start") == requested_start
+                ]
+
+                if not matching_slots:
+                    return XapityChatResponse(
+                        request_id=request_id,
+                        message=req.message,
+                        analysis=analysis,
+                        reply=(
+                            f"Para {service['name']} no encontré staff disponible "
+                            f"el {requested_date.isoformat()} a las {requested_start}. "
+                            "Puedes intentar con otro horario."
+                        ),
+                        data={
+                            "serviceFound": True,
+                            "service": service,
+                            "requestedDate": requested_date.isoformat(),
+                            "requestedStart": requested_start,
+                            "availableStaff": [],
+                            "availableSlots": availability.get("availableSlots", []),
+                            "total": 0,
+                        },
+                        metadata=metadata,
+                    )
+
+                staff_names = ", ".join(
+                    slot.get("staffName", "Staff sin nombre")
+                    for slot in matching_slots
+                )
+
+                return XapityChatResponse(
+                    request_id=request_id,
+                    message=req.message,
+                    analysis=analysis,
+                    reply=(
+                        f"Para {service['name']} el {requested_date.isoformat()} "
+                        f"a las {requested_start} tengo disponible a: {staff_names}."
+                    ),
+                    data={
+                        "serviceFound": True,
+                        "service": service,
+                        "requestedDate": requested_date.isoformat(),
+                        "requestedStart": requested_start,
+                        "availableStaff": matching_slots,
+                        "total": len(matching_slots),
+                    },
+                    metadata=metadata,
+                )
+
+            # =====================================================
+            # FLUJO ACTUAL:
+            # Si no viene día/hora, respondemos staff asociado al servicio.
+            # Esto mantiene el comportamiento que ya probaste con éxito.
+            # =====================================================
+            staff_matches = await find_staff_by_service_id(service["serviceId"])
+
+            if not staff_matches:
+                return XapityChatResponse(
+                    request_id=request_id,
+                    message=req.message,
+                    analysis=analysis,
+                    reply=(
+                        f"Encontré el servicio {service['name']}, pero todavía no hay staff asociado "
+                        "a ese servicio."
+                    ),
+                    data={
+                        "serviceFound": True,
+                        "service": service,
+                        "staff": [],
+                        "total": 0,
+                    },
+                    metadata=metadata,
+                )
+
+            staff_names = ", ".join(
+                staff_member.get("name", "Staff sin nombre")
+                for staff_member in staff_matches
+            )
+
+            return XapityChatResponse(
+                request_id=request_id,
+                message=req.message,
+                analysis=analysis,
+                reply=(
+                    f"Para {service['name']} tengo disponible el siguiente staff: "
+                    f"{staff_names}."
+                ),
+                data={
+                    "serviceFound": True,
+                    "service": service,
+                    "staff": staff_matches,
+                    "total": len(staff_matches),
+                },
+                metadata=metadata,
+            )
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "xapity_staff_by_service_failed",
+                    "request_id": request_id,
+                },
+            ) from exc
+    
+    # # 4. Caso: consultar staff por servicio
+    # if analysis.intent == "staff_by_service":
+    #     try:
+    #         service = await find_service_from_message(req.message)
+
+    #         if not service:
+    #             service_query = extract_service_query_from_staff_message(req.message)
+
+    #             return XapityChatResponse(
+    #                 request_id=request_id,
+    #                 message=req.message,
+    #                 analysis=analysis,
+    #                 reply=(
+    #                     f"No encontré un servicio llamado '{service_query}'. "
+    #                     "Puedes revisar los servicios disponibles o escribir el nombre del servicio con más detalle."
+    #                 ),
+    #                 data={
+    #                     "serviceFound": False,
+    #                     "serviceQuery": service_query,
+    #                 },
+    #                 metadata=metadata,
+    #             )
+
+    #         staff_matches = await find_staff_by_service_id(service["serviceId"])
+
+    #         if not staff_matches:
+    #             return XapityChatResponse(
+    #                 request_id=request_id,
+    #                 message=req.message,
+    #                 analysis=analysis,
+    #                 reply=(
+    #                     f"Encontré el servicio {service['name']}, pero todavía no hay staff asociado "
+    #                     "a ese servicio."
+    #                 ),
+    #                 data={
+    #                     "serviceFound": True,
+    #                     "service": service,
+    #                     "staff": [],
+    #                     "total": 0,
+    #                 },
+    #                 metadata=metadata,
+    #             )
+
+    #         staff_names = ", ".join(
+    #             staff_member.get("name", "Staff sin nombre")
+    #             for staff_member in staff_matches
+    #         )
+
+    #         return XapityChatResponse(
+    #             request_id=request_id,
+    #             message=req.message,
+    #             analysis=analysis,
+    #             reply=(
+    #                 f"Para {service['name']} tengo disponible el siguiente staff: "
+    #                 f"{staff_names}."
+    #             ),
+    #             data={
+    #                 "serviceFound": True,
+    #                 "service": service,
+    #                 "staff": staff_matches,
+    #                 "total": len(staff_matches),
+    #             },
+    #             metadata=metadata,
+    #         )
+
+    #     except Exception as exc:
+    #         raise HTTPException(
+    #             status_code=500,
+    #             detail={
+    #                 "error": "xapity_staff_by_service_failed",
+    #                 "request_id": request_id,
+    #             },
+    #         ) from exc
+    
+    # 5. Caso: crear agenda / appointment
     if analysis.intent == "create_appointment":
         try:
             business_id = "1"
@@ -628,7 +987,7 @@ async def xapity_chat_endpoint(
                 },
             ) from exc
     
-    # 5. Caso: total de ventas / ingresos por venta
+    # 6. Caso: total de ventas / ingresos por venta
     if analysis.intent == "sales_total":
         try:
             # MVP:
@@ -682,7 +1041,7 @@ async def xapity_chat_endpoint(
                 },
             ) from exc
 
-    # 6. Caso: resto de intenciones
+    # 7. Caso: resto de intenciones
     return XapityChatResponse(
         request_id=request_id,
         message=req.message,
