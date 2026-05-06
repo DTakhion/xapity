@@ -18,6 +18,7 @@ MONGO_DB = os.getenv("MONGO_DB", "xapity_db")
 SERVICES_COLLECTION = os.getenv("SERVICES_COLLECTION", "services")
 STAFF_COLLECTION = os.getenv("STAFF_COLLECTION", "staff")
 APPOINTMENTS_COLLECTION = os.getenv("APPOINTMENTS_COLLECTION", "appointments")
+USERS_COLLECTION = os.getenv("USERS_COLLECTION", "users")
 
 _client: Optional[MongoClient] = None
 
@@ -62,6 +63,13 @@ def get_appointments_collection() -> Collection:
     """
     db = get_database()
     return db[APPOINTMENTS_COLLECTION]
+
+def get_users_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for authenticated users.
+    """
+    db = get_database()
+    return db[USERS_COLLECTION]
 
 def serialize_mongo_document(document: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -405,3 +413,63 @@ def soft_delete_appointment_by_appointment_id(
 
     except PyMongoError as exc:
         raise RuntimeError("Error soft deleting appointment by appointmentId.") from exc
+
+def insert_user(user_document: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inserts a user document into MongoDB and returns the inserted document.
+    """
+    try:
+        collection = get_users_collection()
+
+        result = collection.insert_one(user_document)
+
+        inserted_document = collection.find_one({"_id": result.inserted_id})
+        if not inserted_document:
+            raise RuntimeError("User was inserted but could not be retrieved.")
+
+        return serialize_mongo_document(inserted_document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error inserting user into MongoDB.") from exc
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a non-deleted user by email.
+    """
+    try:
+        collection = get_users_collection()
+
+        document = collection.find_one({
+            "email": email,
+            "isDeleted": False,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving user by email.") from exc
+
+
+def get_user_by_user_id(user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a non-deleted user by userId.
+    """
+    try:
+        collection = get_users_collection()
+
+        document = collection.find_one({
+            "userId": user_id,
+            "isDeleted": False,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving user by userId.") from exc
