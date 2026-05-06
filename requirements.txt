@@ -26,3 +26,6 @@ uvicorn==0.40.0
 email-validator
 playwright
 chromium
+bcrypt==4.0.1
+passlib[bcrypt]
+python-jose

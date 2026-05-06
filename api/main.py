@@ -67,6 +67,24 @@ from schemas.xapity_chat import (
     XapityResponseMetadata,
 )
 
+from schemas.auth import (
+    AuthRegisterRequest,
+    AuthLoginRequest,
+    AuthLoginResponse,
+    AuthMeResponse,
+    AuthUserResponse,
+)
+
+from services.auth_service import (
+    register_user,
+    login_user,
+    get_user_by_id,
+    SECRET_KEY,
+    ALGORITHM,
+)
+
+from jose import JWTError, jwt
+
 #from services.xapity_service import detect_xapity_intent, build_xapity_reply
 from services.xapity_service import detect_xapity_intent, build_xapity_reply, normalize_message
 
@@ -75,7 +93,8 @@ from services.sales_service import get_sales_total_for_period
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
 #agregado por felix ortiz 16-03, esto es para permitir la comunicacion con front, evitando asi un error 405
@@ -95,6 +114,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+bearer_scheme = HTTPBearer()
 
 DEBUG = os.getenv("DEBUG", "false").lower() in {"1", "true", "yes", "y"}
 GATE_ENGINE = os.getenv("GATE_ENGINE", "ollama")
@@ -116,6 +137,143 @@ class GateRequest(BaseModel):
 def health():
     return {"ok": True}
 
+# ============================================================
+# AUTH
+# ============================================================
+
+def extract_bearer_token(authorization: Optional[str]) -> str:
+    """
+    Extrae el token desde el header:
+    Authorization: Bearer <token>
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header.",
+        )
+
+    parts = authorization.split()
+
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Authorization header format.",
+        )
+
+    return parts[1]
+
+
+async def get_current_auth_user(authorization: Optional[str]) -> Dict[str, Any]:
+    """
+    Valida JWT y retorna usuario actual desde Mongo.
+    """
+    token = extract_bearer_token(authorization)
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub") or payload.get("userId")
+
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid token payload.",
+            )
+
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token.",
+        ) from exc
+
+    user = await get_user_by_id(user_id)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found or inactive.",
+        )
+
+    return user
+
+
+@app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
+async def auth_register_endpoint(payload: AuthRegisterRequest):
+    """
+    Registra un usuario local en MongoDB.
+
+    MVP:
+    - No verifica email todavía.
+    - Crea businessId automáticamente.
+    - Guarda passwordHash, nunca password plano.
+    """
+    try:
+        user = await register_user(payload)
+        return user
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while registering user.",
+        ) from exc
+
+
+@app.post("/auth/login", response_model=AuthLoginResponse)
+async def auth_login_endpoint(payload: AuthLoginRequest):
+    """
+    Login local con email + password.
+
+    Retorna:
+    - accessToken
+    - tokenType
+    - user
+    """
+    try:
+        return await login_user(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while logging in.",
+        ) from exc
+
+
+@app.get("/auth/me", response_model=AuthMeResponse)
+async def auth_me_endpoint(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    authorization = f"{credentials.scheme} {credentials.credentials}"
+    user = await get_current_auth_user(authorization)
+
+    return {
+        "user": user,
+    }
+
+
+@app.post("/auth/logout")
+async def auth_logout_endpoint():
+    """
+    Logout stateless.
+
+    MVP:
+    - El backend no invalida tokens todavía.
+    - El frontend debe borrar accessToken del localStorage.
+    """
+    return {
+        "ok": True,
+        "message": "Logout handled client-side.",
+    }
 
 @app.post("/llm/generate")
 def generate_llm(req: PromptRequest, x_request_id: Optional[str] = Header(default=None)):
