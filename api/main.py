@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from schemas.staff import StaffCreateRequest, StaffResponse
 from services.staff_repo import create_staff, get_staff_list
 
+# agregado por Felippe 12-05-2026
+from services.staff_service import delete_staff
 
 # @app.post("/staff", response_model=StaffResponse)
 # def create_staff_endpoint(staff: StaffCreate):
@@ -461,3 +463,20 @@ async def get_staff_endpoint():
             status_code=500,
             detail="Internal error while retrieving staff."
         ) from exc
+        
+# DELETE / staff {Agregado por felippe 12-05-2026}
+
+@app.delete("/staff/{staffId}")
+def delete_staff_endpoint(staffId: str):
+    deleted = delete_staff(staffId)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Staff not found or already deleted"
+        )
+
+    return {
+        "message": "Staff deleted successfully",
+        "staffId": staffId
+    }
