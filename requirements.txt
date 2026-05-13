@@ -29,3 +29,6 @@ chromium
 bcrypt==4.0.1
 passlib[bcrypt]
 python-jose
+pymupdf #pip install pymupdf requests numpy
+chromadb
+numpy

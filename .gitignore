@@ -23,6 +23,10 @@ env/
 .coverage
 htmlcov/
 
+# Dataset + Administracion
+data/
+adm/
+
 # Logs
 *.log
 

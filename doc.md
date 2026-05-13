@@ -29,6 +29,16 @@ http://localhost:11434
 ollama pull llama3.2
 ```
 
+``` bash
+ollama pull nomic-embed-text
+```
+
+``` bash
+ollama pull mistral
+```
+
+
+
 Verificar que esté disponible:
 
 ``` bash
