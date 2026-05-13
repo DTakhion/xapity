@@ -1,0 +1,181 @@
+{
+  "benefitId": "permiso_legal_matrimonio",
+  "category": {
+    "id": "familia_asignaciones",
+    "name": "Beneficios de Familia y Asignaciones"
+  },
+  "title": "Permiso Legal por Matrimonio",
+  "type": "permiso_legal",
+  "nature": "legal",
+  "source": {
+    "document": "manual_beneficios_2025_2027.pdf",
+    "organization": "MAF Chile",
+    "validFrom": "2025-04-01",
+    "validTo": "2027-03-31"
+  },
+  "summary": "Permiso legal pagado de 5 días hábiles continuos por matrimonio o unión civil. El beneficio es adicional al período de vacaciones legales y requiere aviso previo y acreditación documental.",
+  "rules": [
+    {
+      "id": "dias_permiso",
+      "description": "El colaborador tiene derecho a 5 días hábiles continuos de permiso pagado.",
+      "value": 5,
+      "unit": "dias_habiles"
+    },
+    {
+      "id": "vacaciones",
+      "description": "El permiso es adicional al período de vacaciones legales."
+    },
+    {
+      "id": "uso_beneficio",
+      "description": "El permiso puede utilizarse el día del matrimonio y en los días inmediatamente anteriores o posteriores a la celebración."
+    },
+    {
+      "id": "aviso_previo",
+      "description": "El colaborador debe dar aviso preferentemente por escrito con 30 días de anticipación.",
+      "daysPriorNotice": 30
+    },
+    {
+      "id": "documentacion",
+      "description": "Debe presentar certificado de matrimonio dentro de los 30 días posteriores a la celebración.",
+      "daysAfterEvent": 30
+    }
+  ],
+  "requirements": [
+    {
+      "type": "notice",
+      "description": "Dar aviso preferentemente por escrito al empleador."
+    },
+    {
+      "type": "document",
+      "description": "Presentar certificado de matrimonio o unión civil."
+    }
+  ],
+  "documents": [
+    {
+      "name": "Certificado de matrimonio",
+      "issuer": "Servicio de Registro Civil e Identificación",
+      "required": true
+    },
+    {
+      "name": "Certificado de unión civil",
+      "issuer": "Servicio de Registro Civil e Identificación",
+      "required": false
+    }
+  ],
+  "restrictions": [
+    {
+      "id": "continuous_days",
+      "description": "Los días deben utilizarse de forma continua."
+    },
+    {
+      "id": "requires_documents",
+      "description": "El beneficio requiere acreditación documental."
+    },
+    {
+      "id": "hr_validation",
+      "description": "La validación final depende de Gestión de Personas."
+    },
+    {
+      "id": "contract_validation",
+      "description": "El chatbot no valida tipo de contrato ni elegibilidad individual."
+    }
+  ],
+  "humanQuestions": [
+    "¿Cuántos días tengo por matrimonio?",
+    "¿Tengo permiso si me caso?",
+    "¿Cuántos días dan por unión civil?",
+    "¿Tengo que avisar antes?",
+    "¿Qué documento debo presentar?",
+    "¿Se descuentan de mis vacaciones?",
+    "¿Puedo usar los días antes del matrimonio?",
+    "¿Puedo usar los días después del matrimonio?",
+    "¿Los días deben ser seguidos?",
+    "¿Cuánto plazo tengo para entregar el certificado?",
+    "¿Qué pasa si no entrego el certificado?"
+  ],
+  "idealAnswers": [
+    {
+      "question": "¿Cuántos días tengo por matrimonio?",
+      "answer": "Según el Manual de Beneficios de MAF Chile, el colaborador tiene derecho a 5 días hábiles continuos de permiso pagado por matrimonio o unión civil."
+    },
+    {
+      "question": "¿Se descuentan de mis vacaciones?",
+      "answer": "No. El permiso legal por matrimonio es adicional al período de vacaciones legales."
+    },
+    {
+      "question": "¿Qué tengo que hacer si me caso?",
+      "answer": "Debes dar aviso preferentemente por escrito con 30 días de anticipación y presentar el certificado correspondiente dentro de los 30 días posteriores a la celebración."
+    }
+  ],
+  "edgeCases": [
+    {
+      "case": "El colaborador consulta después del plazo documental.",
+      "expectedBehavior": "Informar que el manual establece un plazo de 30 días para entregar el certificado."
+    },
+    {
+      "case": "El colaborador pregunta si puede usar solo algunos días.",
+      "expectedBehavior": "Indicar que el beneficio corresponde a 5 días continuos."
+    },
+    {
+      "case": "El colaborador consulta si aplica acuerdo de convivencia.",
+      "expectedBehavior": "Indicar que el manual menciona matrimonio o unión civil."
+    },
+    {
+      "case": "El colaborador pregunta si ya tiene el permiso aprobado.",
+      "expectedBehavior": "Derivar a Gestión de Personas."
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "permiso_matrimonio_chunk_1",
+      "type": "summary",
+      "content": "Permiso legal pagado de 5 días hábiles continuos por matrimonio o unión civil."
+    },
+    {
+      "chunkId": "permiso_matrimonio_chunk_2",
+      "type": "vacations",
+      "content": "El permiso legal por matrimonio es adicional al período de vacaciones legales."
+    },
+    {
+      "chunkId": "permiso_matrimonio_chunk_3",
+      "type": "usage",
+      "content": "El permiso puede utilizarse antes o después de la celebración."
+    },
+    {
+      "chunkId": "permiso_matrimonio_chunk_4",
+      "type": "notice",
+      "content": "El colaborador debe dar aviso preferentemente por escrito con 30 días de anticipación."
+    },
+    {
+      "chunkId": "permiso_matrimonio_chunk_5",
+      "type": "documents",
+      "content": "Debe presentarse certificado emitido por el Registro Civil dentro de los 30 días posteriores."
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "matrimonio",
+      "union_civil",
+      "permiso",
+      "vacaciones",
+      "registro_civil",
+      "certificado"
+    ],
+    "requiresDocumentation": true,
+    "requiresPriorNotice": true,
+    "requiresHRValidation": true,
+    "hasMonetaryAmount": false,
+    "hasDays": true,
+    "legalBenefit": true,
+    "corporateBenefit": false,
+    "personalizable": false,
+    "language": "es",
+    "country": "CL"
+  },
+  "chatbotBehavior": {
+    "allowInference": false,
+    "requiresGroundedAnswers": true,
+    "fallbackToHR": true,
+    "mustAvoidPersonalValidation": true
+  }
+}

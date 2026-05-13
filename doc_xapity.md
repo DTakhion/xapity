@@ -20,3 +20,78 @@ python -m data_loader.movimientos_ventas \
   --end-date 2026-03-31 \
   --include-documents 33,34,39
 ```
+
+# Arquitectura modelo RAG Xapity para MAF
+
+xapity-backend/
+│
+├── rag/
+│   │
+│   ├── knowledge_base/
+│   │   │
+│   │   ├── raw/
+│   │   │   └── manual_beneficios_2025_2027.pdf
+│   │   │
+│   │   ├── structured/
+│   │   │   ├── permiso_legal_matrimonio.json
+│   │   │   ├── bono_natalidad.json
+│   │   │   └── permiso_nacimiento.json
+│   │   │
+│   │   ├── chunks/
+│   │   │   └── generated_chunks.json
+│   │   │
+│   │   ├── embeddings/
+│   │   │   └── generated_embeddings.json
+│   │   │
+│   │   └── prompts/
+│   │       ├── system_prompt.txt
+│   │       └── fallback_prompt.txt
+│   │
+│   ├── loaders/
+│   ├── retrievers/
+│   ├── vectorstores/
+│   ├── llm/
+│   └── utils/
+│
+└── main.py
+
+Pregunta del usuario
+   ↓
+Clasificación de intención
+   ↓
+Búsqueda en conocimiento estructurado JSON
+   ↓
+Búsqueda semántica en chunks/embeddings
+   ↓
+Inyección de contexto controlado
+   ↓
+Prompt final
+   ↓
+LLM responde
+   ↓
+Validación mínima de respuesta
+
+# ejecución rag/scripts/build_chunks.py
+
+``` bash
+python rag/scripts/build_chunks.py
+```
+
+# ejecución rag/scripts/build_embeddings.py
+
+``` bash
+python rag/scripts/build_embeddings.py
+```
+
+# ejecucion rag/scripts/retrieve_context.py
+## Se debe tener arriba ollama 'ollama serve' y luego 'ollama pull nomic-embed-text'/'ollama pull llama3.2:3b' (terminales independientes)
+
+``` bash
+python rag/scripts/retrieve_context.py "¿Qué beneficios tiene el trabajador?"
+```
+
+# ejecucion rag/scripts/answer_with_context.py
+## Se debe tener arriba ollama 'ollama serve' y luego 'ollama pull llama3.2:3b' (terminales independientes)
+``` bash
+python rag/scripts/answer_with_context.py "¿Qué permiso tiene un padre por nacimiento de un hijo?"
+```

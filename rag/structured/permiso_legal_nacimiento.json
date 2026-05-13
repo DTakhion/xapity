@@ -1,0 +1,168 @@
+{
+  "benefitId": "permiso_legal_nacimiento",
+  "category": {
+    "id": "familia_asignaciones",
+    "name": "Beneficios de Familia y Asignaciones"
+  },
+  "title": "Permiso Legal por Nacimiento",
+  "type": "permiso_legal",
+  "nature": "legal",
+  "source": {
+    "document": "manual_beneficios_2025_2027.pdf",
+    "organization": "MAF Chile",
+    "validFrom": "2025-04-01",
+    "validTo": "2027-03-31"
+  },
+  "summary": "El padre trabajador tiene derecho a un permiso legal de 5 días por nacimiento de hijo. El beneficio también aplica en procesos de adopción y cuidado personal.",
+  "rules": [
+    {
+      "id": "dias_permiso",
+      "description": "El padre tendrá derecho a un permiso legal de 5 días.",
+      "value": 5,
+      "unit": "dias"
+    },
+    {
+      "id": "evento_valido",
+      "description": "El beneficio aplica por nacimiento de hijo."
+    },
+    {
+      "id": "adopcion",
+      "description": "El beneficio también aplica en procesos de adopción."
+    },
+    {
+      "id": "inicio_adopcion",
+      "description": "El permiso se cuenta desde la notificación de la resolución judicial correspondiente."
+    },
+    {
+      "id": "base_legal",
+      "description": "El beneficio se otorga conforme a los artículos 19 y 24 de la Ley N° 19.620."
+    }
+  ],
+  "requirements": [
+    {
+      "type": "document",
+      "description": "Presentar documentación correspondiente al nacimiento o adopción."
+    }
+  ],
+  "documents": [
+    {
+      "name": "Certificado de nacimiento",
+      "issuer": "Servicio de Registro Civil e Identificación",
+      "required": false
+    },
+    {
+      "name": "Resolución judicial de adopción",
+      "issuer": "Tribunal competente",
+      "required": false
+    }
+  ],
+  "restrictions": [
+    {
+      "id": "father_only",
+      "description": "El beneficio está dirigido al padre trabajador."
+    },
+    {
+      "id": "requires_formal_process",
+      "description": "La adopción debe encontrarse formalizada mediante resolución."
+    },
+    {
+      "id": "requires_documents",
+      "description": "El beneficio requiere acreditación documental."
+    },
+    {
+      "id": "contract_validation",
+      "description": "El chatbot no valida elegibilidad contractual individual."
+    }
+  ],
+  "humanQuestions": [
+    "¿Cuántos días dan por nacimiento de hijo?",
+    "¿Existe permiso legal por nacimiento?",
+    "¿Cuántos días tiene el papá cuando nace un hijo?",
+    "¿El permiso aplica si estoy adoptando?",
+    "¿Cómo funciona en adopción?",
+    "¿Qué documentos tengo que presentar?",
+    "¿Cuándo empiezan a correr los días?",
+    "¿Aplica cuidado personal?",
+    "¿Es distinto al permiso adicional de la empresa?",
+    "¿Quién tiene derecho al beneficio?"
+  ],
+  "idealAnswers": [
+    {
+      "question": "¿Cuántos días tengo por nacimiento de hijo?",
+      "answer": "Según el Manual de Beneficios de MAF Chile, el padre tiene derecho a un permiso legal de 5 días por nacimiento de hijo."
+    },
+    {
+      "question": "¿El permiso aplica si estoy adoptando?",
+      "answer": "Sí. El beneficio también aplica en procesos de adopción y cuidado personal, desde la notificación de la resolución judicial correspondiente."
+    },
+    {
+      "question": "¿Qué documento tengo que presentar?",
+      "answer": "Debes presentar la documentación correspondiente al nacimiento o la resolución judicial asociada al proceso de adopción o cuidado personal."
+    }
+  ],
+  "edgeCases": [
+    {
+      "case": "El colaborador está en trámite de adopción.",
+      "expectedBehavior": "Indicar que el beneficio se activa con resolución formal."
+    },
+    {
+      "case": "Consulta si la madre tiene el mismo beneficio.",
+      "expectedBehavior": "Indicar que el manual especifica el beneficio para el padre."
+    },
+    {
+      "case": "Consulta sobre aprobación interna.",
+      "expectedBehavior": "Derivar a Gestión de Personas."
+    },
+    {
+      "case": "Consulta si puede dividir los días.",
+      "expectedBehavior": "Indicar que el manual no lo especifica expresamente."
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "permiso_nacimiento_chunk_1",
+      "type": "summary",
+      "content": "El padre tendrá derecho a un permiso legal de 5 días por nacimiento de un hijo."
+    },
+    {
+      "chunkId": "permiso_nacimiento_chunk_2",
+      "type": "adoption",
+      "content": "El beneficio también aplica en procesos de adopción."
+    },
+    {
+      "chunkId": "permiso_nacimiento_chunk_3",
+      "type": "adoption_start",
+      "content": "El beneficio se cuenta desde la notificación de la resolución judicial correspondiente."
+    },
+    {
+      "chunkId": "permiso_nacimiento_chunk_4",
+      "type": "legal_reference",
+      "content": "El beneficio se otorga conforme a la Ley N° 19.620."
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "nacimiento",
+      "permiso",
+      "padre",
+      "adopcion",
+      "cuidado_personal",
+      "ley_19620"
+    ],
+    "requiresDocumentation": true,
+    "requiresHRValidation": true,
+    "hasMonetaryAmount": false,
+    "hasDays": true,
+    "legalBenefit": true,
+    "corporateBenefit": false,
+    "personalizable": false,
+    "language": "es",
+    "country": "CL"
+  },
+  "chatbotBehavior": {
+    "allowInference": false,
+    "requiresGroundedAnswers": true,
+    "fallbackToHR": true,
+    "mustAvoidPersonalValidation": true
+  }
+}

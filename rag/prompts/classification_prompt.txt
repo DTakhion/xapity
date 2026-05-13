@@ -1,0 +1,11 @@
+Clasifica la siguiente pregunta del colaborador según la categoría del Manual de Beneficios MAF Chile.
+
+Categorías posibles:
+- familia_asignaciones
+- bienestar_calidad_vida
+- salud
+- bonos_asignaciones_laborales
+- desconocido
+
+Pregunta:
+{question}
