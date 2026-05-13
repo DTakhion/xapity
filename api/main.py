@@ -1470,3 +1470,18 @@ async def delete_appointment_endpoint(appointmentId: str):
         )
 
     return deleted_appointment
+
+@app.get("/services/{service_id}", response_model=ServiceResponse)
+async def get_service(service_id: str):
+    """
+    Obtiene un servicio específico
+    """
+    service = get_service_by_service_id(service_id)
+
+    if not service:
+        raise HTTPException(
+            status_code=404,
+            detail="Service not found.",
+        )
+    
+    return service
