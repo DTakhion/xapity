@@ -1,0 +1,173 @@
+{
+  "benefitId": "bono_natalidad",
+  "category": {
+    "id": "familia_asignaciones",
+    "name": "Beneficios de Familia y Asignaciones"
+  },
+  "title": "Bono Natalidad",
+  "type": "bono",
+  "nature": "corporativo",
+  "source": {
+    "document": "manual_beneficios_2025_2027.pdf",
+    "organization": "MAF Chile",
+    "validFrom": "2025-04-01",
+    "validTo": "2027-03-31"
+  },
+  "summary": "La empresa pagará un bono de natalidad de $50.000 brutos por el nacimiento de cada hijo del colaborador. El beneficio requiere acreditación documental y posee restricciones cuando ambos padres trabajan en la empresa.",
+  "rules": [
+    {
+      "id": "monto_bono",
+      "description": "La empresa pagará un bono de natalidad de $50.000 brutos.",
+      "amount": 50000,
+      "currency": "CLP",
+      "grossAmount": true
+    },
+    {
+      "id": "evento_valido",
+      "description": "El beneficio aplica por nacimiento de cada hijo del colaborador."
+    },
+    {
+      "id": "forma_pago",
+      "description": "El bono se pagará junto con la remuneración mensual correspondiente."
+    },
+    {
+      "id": "documentacion",
+      "description": "El colaborador debe presentar los certificados respectivos."
+    },
+    {
+      "id": "doble_colaborador",
+      "description": "Si ambos padres trabajan en la empresa, solo uno podrá percibir la asignación."
+    }
+  ],
+  "requirements": [
+    {
+      "type": "document",
+      "description": "Presentar certificados correspondientes al nacimiento."
+    },
+    {
+      "type": "legal_validation",
+      "description": "Acreditar carga legal en caso de corresponder."
+    }
+  ],
+  "documents": [
+    {
+      "name": "Certificado de nacimiento",
+      "issuer": "Servicio de Registro Civil e Identificación",
+      "required": true
+    }
+  ],
+  "restrictions": [
+    {
+      "id": "single_beneficiary",
+      "description": "Solo uno de los padres colaboradores puede recibir el bono."
+    },
+    {
+      "id": "requires_documents",
+      "description": "El beneficio requiere acreditación documental."
+    },
+    {
+      "id": "requires_legal_dependency",
+      "description": "Debe acreditarse como carga legal."
+    },
+    {
+      "id": "contract_validation",
+      "description": "El chatbot no valida elegibilidad contractual individual."
+    }
+  ],
+  "humanQuestions": [
+    "¿Existe bono por nacimiento de hijo?",
+    "¿Cuánto pagan por natalidad?",
+    "¿Dan algún bono cuando nace un hijo?",
+    "¿Qué documentos tengo que presentar?",
+    "¿Cuándo pagan el bono?",
+    "¿Cómo se solicita?",
+    "¿Qué pasa si ambos padres trabajan en MAF?",
+    "¿Los dos padres reciben el bono?",
+    "¿El bono se paga automáticamente?",
+    "¿El monto es líquido o bruto?"
+  ],
+  "idealAnswers": [
+    {
+      "question": "¿Cuánto es el bono de natalidad?",
+      "answer": "Según el Manual de Beneficios de MAF Chile, la empresa entrega un bono de natalidad de $50.000 brutos por el nacimiento de cada hijo del colaborador."
+    },
+    {
+      "question": "¿Qué tengo que hacer para recibir el bono natalidad?",
+      "answer": "Debes presentar los certificados correspondientes para acreditar el nacimiento y la carga legal. El bono se paga junto con la remuneración mensual correspondiente."
+    },
+    {
+      "question": "¿Qué pasa si ambos padres trabajan en la empresa?",
+      "answer": "Si ambos padres son colaboradores de la empresa, solo uno de ellos podrá recibir el bono de natalidad."
+    }
+  ],
+  "edgeCases": [
+    {
+      "case": "Ambos padres trabajan en la empresa.",
+      "expectedBehavior": "Informar que solo uno puede recibir el beneficio."
+    },
+    {
+      "case": "Consulta sobre monto líquido.",
+      "expectedBehavior": "Indicar que el manual especifica monto bruto."
+    },
+    {
+      "case": "No existe acreditación carga legal.",
+      "expectedBehavior": "Derivar validación a Gestión de Personas."
+    },
+    {
+      "case": "Consulta si ya fue pagado.",
+      "expectedBehavior": "Derivar a Gestión de Personas."
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "bono_natalidad_chunk_1",
+      "type": "summary",
+      "content": "La empresa pagará un bono de natalidad por el nacimiento de cada hijo del colaborador."
+    },
+    {
+      "chunkId": "bono_natalidad_chunk_2",
+      "type": "amount",
+      "content": "El bono corresponde a $50.000 brutos."
+    },
+    {
+      "chunkId": "bono_natalidad_chunk_3",
+      "type": "payment",
+      "content": "El beneficio se pagará junto con la remuneración mensual correspondiente."
+    },
+    {
+      "chunkId": "bono_natalidad_chunk_4",
+      "type": "documents",
+      "content": "El colaborador debe presentar los certificados respectivos."
+    },
+    {
+      "chunkId": "bono_natalidad_chunk_5",
+      "type": "restriction",
+      "content": "Si ambos padres trabajan en la empresa, solo uno podrá recibir el bono."
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "natalidad",
+      "nacimiento",
+      "hijo",
+      "bono",
+      "familia",
+      "carga_legal"
+    ],
+    "requiresDocumentation": true,
+    "requiresHRValidation": true,
+    "hasMonetaryAmount": true,
+    "hasDays": false,
+    "legalBenefit": false,
+    "corporateBenefit": true,
+    "personalizable": false,
+    "language": "es",
+    "country": "CL"
+  },
+  "chatbotBehavior": {
+    "allowInference": false,
+    "requiresGroundedAnswers": true,
+    "fallbackToHR": true,
+    "mustAvoidPersonalValidation": true
+  }
+}
