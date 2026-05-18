@@ -83,6 +83,10 @@ from services.auth_service import (
     ALGORITHM,
 )
 
+from schemas.rag import RagAnswerRequest, RagAnswerResponse
+from rag.service import answer_user_question
+from db.mongo_persistence import insert_maf_rag_query_log
+
 from jose import JWTError, jwt
 
 #from services.xapity_service import detect_xapity_intent, build_xapity_reply
@@ -119,6 +123,17 @@ bearer_scheme = HTTPBearer()
 
 DEBUG = os.getenv("DEBUG", "false").lower() in {"1", "true", "yes", "y"}
 GATE_ENGINE = os.getenv("GATE_ENGINE", "ollama")
+
+MAF_BUSINESS_ID = os.getenv("MAF_BUSINESS_ID", "maf")
+
+MAF_ALLOWED_EMAIL_DOMAINS = [
+    domain.strip().lower()
+    for domain in os.getenv(
+        "MAF_ALLOWED_EMAIL_DOMAINS",
+        "mafchile.com",
+    ).split(",")
+    if domain.strip()
+]
 
 
 class PromptRequest(BaseModel):
@@ -195,26 +210,77 @@ async def get_current_auth_user(authorization: Optional[str]) -> Dict[str, Any]:
 
     return user
 
+def get_email_domain(email: str) -> str:
+    return email.strip().lower().split("@")[-1]
+
+
+def is_maf_email(email: str) -> bool:
+    return get_email_domain(email) in MAF_ALLOWED_EMAIL_DOMAINS
+
+
+def assert_maf_user(user: Dict[str, Any]) -> None:
+    user_business_id = str(user.get("businessId", ""))
+
+    if user_business_id != str(MAF_BUSINESS_ID):
+        raise HTTPException(
+            status_code=403,
+            detail="Usuario no autorizado para acceder a Xapity MAF.",
+        )
+
+# @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
+# async def auth_register_endpoint(payload: AuthRegisterRequest):
+#     """
+#     Registra un usuario local en MongoDB.
+
+#     MVP:
+#     - No verifica email todavía.
+#     - Crea businessId automáticamente.
+#     - Guarda passwordHash, nunca password plano.
+#     """
+#     try:
+#         if is_maf_email(payload.email):
+#             payload.businessId = MAF_BUSINESS_ID
+
+#         user = await register_user(payload)
+#         return user
+    
+#     # try:
+#     #     user = await register_user(payload)
+#     #     return user
+
+#     except ValueError as exc:
+#         raise HTTPException(
+#             status_code=400,
+#             detail=str(exc),
+#         ) from exc
+
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail="Internal error while registering user.",
+#         ) from exc
 
 @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
 async def auth_register_endpoint(payload: AuthRegisterRequest):
-    """
-    Registra un usuario local en MongoDB.
-
-    MVP:
-    - No verifica email todavía.
-    - Crea businessId automáticamente.
-    - Guarda passwordHash, nunca password plano.
-    """
     try:
-        user = await register_user(payload)
+        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+        
+        user = await register_user(
+            payload=payload,
+            business_id=business_id,
+        )
+        
+        # business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else "1"
+
+        # user = await register_user(
+        #     payload=payload,
+        #     business_id=business_id,
+        # )
+
         return user
 
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        ) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     except Exception as exc:
         raise HTTPException(
@@ -260,6 +326,52 @@ async def auth_me_endpoint(
         "user": user,
     }
 
+@app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
+async def xapity_maf_chat_endpoint(
+    req: RagAnswerRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    x_request_id: Optional[str] = Header(default=None),
+):
+    request_id = x_request_id or str(uuid.uuid4())
+
+    authorization = f"{credentials.scheme} {credentials.credentials}"
+    user = await get_current_auth_user(authorization)
+
+    assert_maf_user(user)
+
+    result = answer_user_question(
+        query=req.query,
+        top_k=req.top_k,
+        min_score=req.min_score,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    log_document = {
+        "requestId": request_id,
+        "businessId": MAF_BUSINESS_ID,
+        "userId": user.get("userId"),
+        "userEmail": user.get("email"),
+        "query": req.query,
+        "answer": result.get("answer"),
+        "status": result.get("status"),
+        "confidence": result.get("confidence"),
+        "matchesCount": result.get("matches_count"),
+        "sources": result.get("sources", []),
+        "createdAt": now,
+        "metadata": {
+            "endpoint": "/xapity-maf/chat",
+            "ragVersion": "v1",
+        },
+    }
+
+    try:
+        insert_maf_rag_query_log(log_document)
+        #await insert_maf_rag_query_log(log_document)
+    except Exception:
+        pass
+
+    return result
 
 @app.post("/auth/logout")
 async def auth_logout_endpoint():

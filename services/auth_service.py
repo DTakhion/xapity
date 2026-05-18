@@ -76,13 +76,55 @@ def create_access_token(data: dict) -> str:
 # REGISTER
 # ============================================================
 
-async def register_user(payload: AuthRegisterRequest) -> Dict[str, Any]:
+# async def register_user(payload: AuthRegisterRequest) -> Dict[str, Any]:
+#     """
+#     Registra un usuario nuevo y crea una organización inicial.
+
+#     Regla MVP:
+#     - Cada signup crea un businessId propio.
+#     - El primer usuario normalmente será admin.
+#     """
+#     existing_user = get_user_by_email(payload.email)
+
+#     if existing_user:
+#         raise ValueError("El correo ya está registrado")
+
+#     now = datetime.now(timezone.utc)
+
+#     user_doc = {
+#         "userId": str(uuid.uuid4()),
+#         "businessId": str(uuid.uuid4()),
+#         "name": payload.name,
+#         "email": payload.email,
+#         "passwordHash": hash_password(payload.password),
+#         "phone": payload.phone,
+#         "organizationName": payload.organizationName,
+#         "role": payload.role,
+#         "authProvider": "local",
+#         "isEmailVerified": False,
+#         "isActive": True,
+#         "isDeleted": False,
+#         "createdAt": now,
+#         "updatedAt": now,
+#     }
+
+#     inserted_user = insert_user(user_doc)
+
+#     # Nunca devolver passwordHash al frontend.
+#     inserted_user.pop("passwordHash", None)
+
+#     return inserted_user
+
+async def register_user(
+    payload: AuthRegisterRequest,
+    business_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Registra un usuario nuevo y crea una organización inicial.
 
     Regla MVP:
-    - Cada signup crea un businessId propio.
-    - El primer usuario normalmente será admin.
+    - Si viene business_id desde el endpoint, se usa ese valor.
+    - Si no viene, se crea un businessId propio.
     """
     existing_user = get_user_by_email(payload.email)
 
@@ -93,7 +135,7 @@ async def register_user(payload: AuthRegisterRequest) -> Dict[str, Any]:
 
     user_doc = {
         "userId": str(uuid.uuid4()),
-        "businessId": str(uuid.uuid4()),
+        "businessId": business_id or str(uuid.uuid4()),
         "name": payload.name,
         "email": payload.email,
         "passwordHash": hash_password(payload.password),
@@ -109,12 +151,9 @@ async def register_user(payload: AuthRegisterRequest) -> Dict[str, Any]:
     }
 
     inserted_user = insert_user(user_doc)
-
-    # Nunca devolver passwordHash al frontend.
     inserted_user.pop("passwordHash", None)
 
     return inserted_user
-
 
 # ============================================================
 # LOGIN
