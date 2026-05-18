@@ -296,6 +296,33 @@ def get_staff(
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving staff from MongoDB.") from exc
 
+def soft_delete_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Soft deletes a staff member by staffId and returns the updated document.
+    """
+    try:
+        collection = get_staff_collection()
+
+        document = collection.find_one_and_update(
+            {"staffId": staff_id, "isDeleted": False},
+            {
+                "$set": {
+                    "isDeleted": True,
+                    "isActive": False,
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error soft deleting staff by staffId.") from exc
+
 def insert_appointment(appointment_document: Dict[str, Any]) -> Dict[str, Any]:
     """
     Inserts an appointment document into MongoDB and returns the inserted document.

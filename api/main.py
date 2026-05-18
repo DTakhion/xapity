@@ -11,8 +11,8 @@ from datetime import datetime, timezone, date, timedelta
 
 # Esta es la importanción correcta para los endpoints de Staff
 from schemas.staff import StaffCreateRequest, StaffResponse
-from services.staff_repo import create_staff, get_staff_list
-
+#from services.staff_repo import create_staff, get_staff_list
+from services.staff_repo import create_staff, get_staff_list, delete_staff
 
 # @app.post("/staff", response_model=StaffResponse)
 # def create_staff_endpoint(staff: StaffCreate):
@@ -1381,6 +1381,31 @@ async def get_staff_endpoint():
             status_code=500,
             detail="Internal error while retrieving staff."
         ) from exc
+
+# DELETE /staff/{staffId}
+
+@app.delete("/staff/{staffId}", response_model=StaffResponse)
+async def delete_staff_endpoint(staffId: str):
+    """
+    Soft delete de un miembro del staff.
+
+    Regla:
+    - No elimina físicamente el documento
+    - Marca isDeleted=True
+    - Marca isActive=False
+    - Actualiza updatedAt
+    - Si no existe o ya está eliminado, retorna 404
+    """
+
+    deleted_staff = await delete_staff(staffId)
+
+    if not deleted_staff:
+        raise HTTPException(
+            status_code=404,
+            detail="Staff not found.",
+        )
+
+    return deleted_staff
 
 # POST /availability
 
