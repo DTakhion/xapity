@@ -84,7 +84,7 @@ from services.auth_service import (
 )
 
 from schemas.rag import RagAnswerRequest, RagAnswerResponse
-from rag.service import answer_user_question
+from rag.hybrid_service import answer_hybrid_question
 from db.mongo_persistence import insert_maf_rag_query_log
 
 from jose import JWTError, jwt
@@ -339,10 +339,8 @@ async def xapity_maf_chat_endpoint(
 
     assert_maf_user(user)
 
-    result = answer_user_question(
+    result = answer_hybrid_question(
         query=req.query,
-        top_k=req.top_k,
-        min_score=req.min_score,
     )
 
     now = datetime.now(timezone.utc)
@@ -361,7 +359,8 @@ async def xapity_maf_chat_endpoint(
         "createdAt": now,
         "metadata": {
             "endpoint": "/xapity-maf/chat",
-            "ragVersion": "v1",
+            "ragVersion": "hybrid-v1",
+            "mode": result.get("mode"),
         },
     }
 
