@@ -33,7 +33,7 @@ from utils.slug import generate_slug
 from utils.tags import generate_tags
 
 # Lógica de persistencia del repo
-from services.service_repo import create_service, get_services_list, update_service, delete_service
+from services.service_repo import create_service, get_services_list, get_service, update_service, delete_service
 
 # Validación de duplicidad antes de insertar en Mongo.
 from db.mongo_persistence import service_name_exists, get_service_by_service_id
@@ -545,6 +545,39 @@ async def get_services_endpoint():
         raise HTTPException(
             status_code=500,
             detail="Internal error while retrieving services."
+        ) from exc
+    
+# GET /services/{serviceId}
+
+@app.get("/services/{serviceId}", response_model=ServiceResponse)
+async def get_service_endpoint(serviceId: str):
+    """
+    Obtiene un servicio específico por serviceId.
+
+    Reglas:
+    - Busca por serviceId
+    - Solo retorna servicios no eliminados
+    - Si no existe o está eliminado, retorna 404
+    """
+
+    try:
+        service = await get_service(serviceId)
+
+        if not service:
+            raise HTTPException(
+                status_code=404,
+                detail="Service not found.",
+            )
+
+        return service
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving service.",
         ) from exc
 
 # PATCH /services/{serviceId}
