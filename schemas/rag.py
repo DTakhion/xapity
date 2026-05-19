@@ -39,5 +39,6 @@ class RagAnswerResponse(BaseModel):
     query: str
     matches_count: int
     confidence: Literal["high", "medium", "low", "none"]
+    mode: str | None = None
     sources: list[RagSource] = Field(default_factory=list)
     error_detail: str | None = None
