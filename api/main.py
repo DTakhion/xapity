@@ -93,6 +93,8 @@ from jose import JWTError, jwt
 from services.xapity_service import detect_xapity_intent, build_xapity_reply, normalize_message
 
 from services.sales_service import get_sales_total_for_period
+from schemas.xapity_luca import XapityLucaRequest, XapityLucaResponse
+from xapity_luca.service import handle_xapity_luca_request
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
@@ -371,6 +373,61 @@ async def xapity_maf_chat_endpoint(
         pass
 
     return result
+
+# ============================================================
+# XAPITY LUCA
+# ============================================================
+
+@app.post("/xapity-luca/chat", response_model=XapityLucaResponse)
+async def xapity_luca_chat_endpoint(
+    req: XapityLucaRequest,
+    x_request_id: Optional[str] = Header(default=None),
+):
+    """
+    Chat financiero Xapity-Luca.
+
+    MVP:
+    - Sin restricción de usuario.
+    - business_id puede venir en el body.
+    - Si no viene, usa LUCA_BUSINESS_ID desde .env.
+    - requested_by puede venir en el body para auditoría.
+    """
+
+    request_id = x_request_id or str(uuid.uuid4())
+
+    try:
+        response = handle_xapity_luca_request(req)
+        return response
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "xapity_luca_data_not_found",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "xapity_luca_invalid_request",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "xapity_luca_internal_error",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
 
 @app.post("/auth/logout")
 async def auth_logout_endpoint():
