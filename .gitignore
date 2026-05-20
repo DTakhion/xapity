@@ -27,6 +27,9 @@ htmlcov/
 data/
 adm/
 
+# Luca reports
+luca/reports/output/
+
 # Logs
 *.log
 
