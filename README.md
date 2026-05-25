@@ -1,5 +1,11 @@
 # xapity
 
+# deploy 
+
+```
+https://xapity-api-179536772092.us-central1.run.app/docs
+```
+
 Laboratorio para pruebas de integración LLM + Middleware (QiCore).
 
 xapity permite:
