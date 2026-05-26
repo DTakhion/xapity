@@ -1,0 +1,58 @@
+name: Deploy DEV to Cloud Run
+
+on:
+  push:
+    branches:
+      - dev
+
+env:
+  PROJECT_ID: fiery-strategy-497320-n9
+  REGION: us-central1
+  REPOSITORY: xapity
+  SERVICE: xapity-api-dev
+  IMAGE: xapity-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }} \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:dev \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }}
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:dev
+
+      - name: Deploy to Cloud Run DEV
+        run: |
+          gcloud run deploy $SERVICE \
+            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }} \
+            --region $REGION \
+            --platform managed \
+            --no-invoker-iam-check

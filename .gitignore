@@ -17,6 +17,7 @@ env/
 # dotenv
 .env
 .env.*
+env.cloudrun.yaml
 
 # Tests / coverage
 .pytest_cache/
@@ -27,6 +28,9 @@ htmlcov/
 data/
 adm/
 
+# Luca reports
+luca/reports/output/
+
 # Logs
 *.log
 
@@ -36,3 +40,7 @@ adm/
 # VS Code
 .vscode/
 results/
+env.cloudrun.yaml
+
+# Google Cloud
+*.json

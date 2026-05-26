@@ -95,3 +95,15 @@ python rag/scripts/retrieve_context.py "¿Qué beneficios tiene el trabajador?"
 ``` bash
 python rag/scripts/answer_with_context.py "¿Qué permiso tiene un padre por nacimiento de un hijo?"
 ```
+
+# Para build dockerfile
+``` bash
+docker build --platform linux/amd64 -t xapity-api:local .
+```
+
+# levantamos api desde la imagen docker construida
+``` bash
+docker run --env-file .env -p 8080:8080 xapity-api:local
+```
+## abrimos en 
+

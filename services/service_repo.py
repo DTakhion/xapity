@@ -7,7 +7,13 @@ from typing import Any, Dict, List
 # NUEVO:
 # El repo no inserta directo con pymongo aquí mismo.
 # Reutiliza la capa de persistencia central del proyecto.
-from db.mongo_persistence import insert_service, get_services, update_service_by_service_id, soft_delete_service_by_service_id
+from db.mongo_persistence import (
+    insert_service,
+    get_services,
+    get_service_by_service_id,
+    update_service_by_service_id,
+    soft_delete_service_by_service_id,
+)
 
 async def create_service(document: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -46,6 +52,17 @@ async def get_services_list() -> List[Dict[str, Any]]:
         return services
     except Exception as exc:
         raise RuntimeError("Error retrieving services in repository layer.") from exc
+
+async def get_service(service_id: str) -> Dict[str, Any] | None:
+    """
+    Devuelve un servicio específico no eliminado desde MongoDB.
+    """
+    try:
+        service = get_service_by_service_id(service_id)
+        return service
+
+    except Exception as exc:
+        raise RuntimeError("Error retrieving service in repository layer.") from exc
 
 async def update_service(
     service_id: str,

@@ -11,8 +11,8 @@ from datetime import datetime, timezone, date, timedelta
 
 # Esta es la importanción correcta para los endpoints de Staff
 from schemas.staff import StaffCreateRequest, StaffResponse
-from services.staff_repo import create_staff, get_staff_list
-
+#from services.staff_repo import create_staff, get_staff_list
+from services.staff_repo import create_staff, get_staff_list, delete_staff
 
 # @app.post("/staff", response_model=StaffResponse)
 # def create_staff_endpoint(staff: StaffCreate):
@@ -33,7 +33,7 @@ from utils.slug import generate_slug
 from utils.tags import generate_tags
 
 # Lógica de persistencia del repo
-from services.service_repo import create_service, get_services_list, update_service, delete_service
+from services.service_repo import create_service, get_services_list, get_service, update_service, delete_service
 
 # Validación de duplicidad antes de insertar en Mongo.
 from db.mongo_persistence import service_name_exists, get_service_by_service_id
@@ -83,12 +83,18 @@ from services.auth_service import (
     ALGORITHM,
 )
 
+from schemas.rag import RagAnswerRequest, RagAnswerResponse
+from rag.hybrid_service import answer_hybrid_question
+from db.mongo_persistence import insert_maf_rag_query_log
+
 from jose import JWTError, jwt
 
 #from services.xapity_service import detect_xapity_intent, build_xapity_reply
 from services.xapity_service import detect_xapity_intent, build_xapity_reply, normalize_message
 
 from services.sales_service import get_sales_total_for_period
+from schemas.xapity_luca import XapityLucaRequest, XapityLucaResponse
+from xapity_luca.service import handle_xapity_luca_request
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
@@ -119,6 +125,17 @@ bearer_scheme = HTTPBearer()
 
 DEBUG = os.getenv("DEBUG", "false").lower() in {"1", "true", "yes", "y"}
 GATE_ENGINE = os.getenv("GATE_ENGINE", "ollama")
+
+MAF_BUSINESS_ID = os.getenv("MAF_BUSINESS_ID", "maf")
+
+MAF_ALLOWED_EMAIL_DOMAINS = [
+    domain.strip().lower()
+    for domain in os.getenv(
+        "MAF_ALLOWED_EMAIL_DOMAINS",
+        "mafchile.com",
+    ).split(",")
+    if domain.strip()
+]
 
 
 class PromptRequest(BaseModel):
@@ -195,26 +212,77 @@ async def get_current_auth_user(authorization: Optional[str]) -> Dict[str, Any]:
 
     return user
 
+def get_email_domain(email: str) -> str:
+    return email.strip().lower().split("@")[-1]
+
+
+def is_maf_email(email: str) -> bool:
+    return get_email_domain(email) in MAF_ALLOWED_EMAIL_DOMAINS
+
+
+def assert_maf_user(user: Dict[str, Any]) -> None:
+    user_business_id = str(user.get("businessId", ""))
+
+    if user_business_id != str(MAF_BUSINESS_ID):
+        raise HTTPException(
+            status_code=403,
+            detail="Usuario no autorizado para acceder a Xapity MAF.",
+        )
+
+# @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
+# async def auth_register_endpoint(payload: AuthRegisterRequest):
+#     """
+#     Registra un usuario local en MongoDB.
+
+#     MVP:
+#     - No verifica email todavía.
+#     - Crea businessId automáticamente.
+#     - Guarda passwordHash, nunca password plano.
+#     """
+#     try:
+#         if is_maf_email(payload.email):
+#             payload.businessId = MAF_BUSINESS_ID
+
+#         user = await register_user(payload)
+#         return user
+    
+#     # try:
+#     #     user = await register_user(payload)
+#     #     return user
+
+#     except ValueError as exc:
+#         raise HTTPException(
+#             status_code=400,
+#             detail=str(exc),
+#         ) from exc
+
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail="Internal error while registering user.",
+#         ) from exc
 
 @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
 async def auth_register_endpoint(payload: AuthRegisterRequest):
-    """
-    Registra un usuario local en MongoDB.
-
-    MVP:
-    - No verifica email todavía.
-    - Crea businessId automáticamente.
-    - Guarda passwordHash, nunca password plano.
-    """
     try:
-        user = await register_user(payload)
+        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+        
+        user = await register_user(
+            payload=payload,
+            business_id=business_id,
+        )
+        
+        # business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else "1"
+
+        # user = await register_user(
+        #     payload=payload,
+        #     business_id=business_id,
+        # )
+
         return user
 
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        ) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     except Exception as exc:
         raise HTTPException(
@@ -260,6 +328,106 @@ async def auth_me_endpoint(
         "user": user,
     }
 
+@app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
+async def xapity_maf_chat_endpoint(
+    req: RagAnswerRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    x_request_id: Optional[str] = Header(default=None),
+):
+    request_id = x_request_id or str(uuid.uuid4())
+
+    authorization = f"{credentials.scheme} {credentials.credentials}"
+    user = await get_current_auth_user(authorization)
+
+    assert_maf_user(user)
+
+    result = answer_hybrid_question(
+        query=req.query,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    log_document = {
+        "requestId": request_id,
+        "businessId": MAF_BUSINESS_ID,
+        "userId": user.get("userId"),
+        "userEmail": user.get("email"),
+        "query": req.query,
+        "answer": result.get("answer"),
+        "status": result.get("status"),
+        "confidence": result.get("confidence"),
+        "matchesCount": result.get("matches_count"),
+        "sources": result.get("sources", []),
+        "createdAt": now,
+        "metadata": {
+            "endpoint": "/xapity-maf/chat",
+            "ragVersion": "hybrid-v1",
+            "mode": result.get("mode"),
+        },
+    }
+
+    try:
+        insert_maf_rag_query_log(log_document)
+        #await insert_maf_rag_query_log(log_document)
+    except Exception:
+        pass
+
+    return result
+
+# ============================================================
+# XAPITY LUCA
+# ============================================================
+
+@app.post("/xapity-luca/chat", response_model=XapityLucaResponse)
+async def xapity_luca_chat_endpoint(
+    req: XapityLucaRequest,
+    x_request_id: Optional[str] = Header(default=None),
+):
+    """
+    Chat financiero Xapity-Luca.
+
+    MVP:
+    - Sin restricción de usuario.
+    - business_id puede venir en el body.
+    - Si no viene, usa LUCA_BUSINESS_ID desde .env.
+    - requested_by puede venir en el body para auditoría.
+    """
+
+    request_id = x_request_id or str(uuid.uuid4())
+
+    try:
+        response = handle_xapity_luca_request(req)
+        return response
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "xapity_luca_data_not_found",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "xapity_luca_invalid_request",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "xapity_luca_internal_error",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
 
 @app.post("/auth/logout")
 async def auth_logout_endpoint():
@@ -434,6 +602,39 @@ async def get_services_endpoint():
         raise HTTPException(
             status_code=500,
             detail="Internal error while retrieving services."
+        ) from exc
+    
+# GET /services/{serviceId}
+
+@app.get("/services/{serviceId}", response_model=ServiceResponse)
+async def get_service_endpoint(serviceId: str):
+    """
+    Obtiene un servicio específico por serviceId.
+
+    Reglas:
+    - Busca por serviceId
+    - Solo retorna servicios no eliminados
+    - Si no existe o está eliminado, retorna 404
+    """
+
+    try:
+        service = await get_service(serviceId)
+
+        if not service:
+            raise HTTPException(
+                status_code=404,
+                detail="Service not found.",
+            )
+
+        return service
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving service.",
         ) from exc
 
 # PATCH /services/{serviceId}
@@ -1269,6 +1470,31 @@ async def get_staff_endpoint():
             status_code=500,
             detail="Internal error while retrieving staff."
         ) from exc
+
+# DELETE /staff/{staffId}
+
+@app.delete("/staff/{staffId}", response_model=StaffResponse)
+async def delete_staff_endpoint(staffId: str):
+    """
+    Soft delete de un miembro del staff.
+
+    Regla:
+    - No elimina físicamente el documento
+    - Marca isDeleted=True
+    - Marca isActive=False
+    - Actualiza updatedAt
+    - Si no existe o ya está eliminado, retorna 404
+    """
+
+    deleted_staff = await delete_staff(staffId)
+
+    if not deleted_staff:
+        raise HTTPException(
+            status_code=404,
+            detail="Staff not found.",
+        )
+
+    return deleted_staff
 
 # POST /availability
 

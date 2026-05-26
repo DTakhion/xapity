@@ -32,3 +32,4 @@ python-jose
 pymupdf #pip install pymupdf requests numpy
 chromadb
 numpy
+openpyxl
