@@ -9,7 +9,7 @@ env:
   PROJECT_ID: fiery-strategy-497320-n9
   REGION: us-central1
   REPOSITORY: xapity
-  SERVICE: xapity-api
+  SERVICE: xapity-api-dev
   IMAGE: xapity-api
 
 jobs:
