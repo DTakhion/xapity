@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from db.mongo_persistence import insert_staff, get_staff, soft_delete_staff_by_staff_id
-
-
+from db.mongo_persistence import (
+    insert_staff,
+    get_staff,
+    get_staff_by_staff_id,
+    soft_delete_staff_by_staff_id,
+)
 
 async def create_staff(document: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -36,6 +39,18 @@ async def get_staff_list() -> List[Dict[str, Any]]:
 
     except Exception as exc:
         raise RuntimeError("Error retrieving staff in repository layer.") from exc
+
+async def get_staff_by_id(staff_id: str) -> Dict[str, Any] | None:
+    """
+    Devuelve un miembro específico del staff por staffId,
+    validando que no esté eliminado.
+    """
+    try:
+        staff = get_staff_by_staff_id(staff_id)
+        return staff
+
+    except Exception as exc:
+        raise RuntimeError("Error retrieving staff by staffId in repository layer.") from exc
 
 async def delete_staff(staff_id: str) -> Dict[str, Any] | None:
     """

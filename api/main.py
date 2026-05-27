@@ -12,7 +12,12 @@ from datetime import datetime, timezone, date, timedelta
 # Esta es la importanción correcta para los endpoints de Staff
 from schemas.staff import StaffCreateRequest, StaffResponse
 #from services.staff_repo import create_staff, get_staff_list
-from services.staff_repo import create_staff, get_staff_list, delete_staff
+from services.staff_repo import (
+    create_staff,
+    get_staff_list,
+    get_staff_by_id,
+    delete_staff,
+)
 
 # @app.post("/staff", response_model=StaffResponse)
 # def create_staff_endpoint(staff: StaffCreate):
@@ -1469,6 +1474,39 @@ async def get_staff_endpoint():
         raise HTTPException(
             status_code=500,
             detail="Internal error while retrieving staff."
+        ) from exc
+
+# GET /staff/{staffId}
+
+@app.get("/staff/{staffId}", response_model=StaffResponse)
+async def get_staff_by_id_endpoint(staffId: str):
+    """
+    Obtiene un miembro específico del staff por staffId.
+
+    Reglas:
+    - Busca por staffId
+    - Solo retorna staff no eliminado
+    - Si no existe o está eliminado, retorna 404
+    """
+
+    try:
+        staff = await get_staff_by_id(staffId)
+
+        if not staff:
+            raise HTTPException(
+                status_code=404,
+                detail="Staff not found.",
+            )
+
+        return staff
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving staff member.",
         ) from exc
 
 # DELETE /staff/{staffId}
