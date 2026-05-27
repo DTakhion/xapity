@@ -296,6 +296,26 @@ def get_staff(
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving staff from MongoDB.") from exc
 
+def get_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a single staff member by its internal staffId.
+    """
+    try:
+        collection = get_staff_collection()
+
+        document = collection.find_one({
+            "staffId": staff_id,
+            "isDeleted": False,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving staff by staffId.") from exc
+
 def soft_delete_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
     """
     Soft deletes a staff member by staffId and returns the updated document.
