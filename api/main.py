@@ -10,12 +10,14 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone, date, timedelta
 
 # Esta es la importanción correcta para los endpoints de Staff
-from schemas.staff import StaffCreateRequest, StaffResponse
+from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
+
 #from services.staff_repo import create_staff, get_staff_list
 from services.staff_repo import (
     create_staff,
     get_staff_list,
     get_staff_by_id,
+    update_staff,
     delete_staff,
 )
 
@@ -1508,6 +1510,56 @@ async def get_staff_by_id_endpoint(staffId: str):
             status_code=500,
             detail="Internal error while retrieving staff member.",
         ) from exc
+
+# PATCH /staff/{staffId}
+
+@app.patch("/staff/{staffId}", response_model=StaffResponse)
+async def update_staff_endpoint(staffId: str, staff: StaffUpdateRequest):
+    """
+    Actualiza parcialmente un miembro del staff.
+
+    Reglas:
+    - Busca por staffId
+    - Solo actualiza staff activo y no eliminado
+    - Si no existe, está inactivo o eliminado, retorna 404
+    - Si no se envían campos para actualizar, retorna 400
+    - Siempre actualiza updatedAt
+    """
+
+    update_data = staff.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+    
+    update_data = staff.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+    
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+    
+    updated_staff = await update_staff(staffId, update_data)
+
+    # if "workingHours" in update_data and update_data["workingHours"] is not None:
+    #     update_data["workingHours"] = update_data["workingHours"].model_dump()
+
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+
+    updated_staff = await update_staff(staffId, update_data)
+
+    if not updated_staff:
+        raise HTTPException(
+            status_code=404,
+            detail="Staff not found, inactive, or deleted.",
+        )
+
+    return updated_staff
 
 # DELETE /staff/{staffId}
 

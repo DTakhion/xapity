@@ -316,6 +316,30 @@ def get_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving staff by staffId.") from exc
 
+def update_staff_by_staff_id(
+    staff_id: str,
+    update_fields: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates a staff member by staffId and returns the updated document.
+    """
+    try:
+        collection = get_staff_collection()
+
+        document = collection.find_one_and_update(
+            {"staffId": staff_id, "isDeleted": False, "isActive": True},
+            {"$set": update_fields},
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error updating staff by staffId.") from exc
+
 def soft_delete_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
     """
     Soft deletes a staff member by staffId and returns the updated document.

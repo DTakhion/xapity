@@ -8,6 +8,7 @@ from db.mongo_persistence import (
     insert_staff,
     get_staff,
     get_staff_by_staff_id,
+    update_staff_by_staff_id,
     soft_delete_staff_by_staff_id,
 )
 
@@ -51,6 +52,24 @@ async def get_staff_by_id(staff_id: str) -> Dict[str, Any] | None:
 
     except Exception as exc:
         raise RuntimeError("Error retrieving staff by staffId in repository layer.") from exc
+
+async def update_staff(
+    staff_id: str,
+    update_fields: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """
+    Actualiza parcialmente un miembro del staff.
+    """
+    try:
+        updated_staff = update_staff_by_staff_id(
+            staff_id,
+            update_fields,
+        )
+
+        return updated_staff
+
+    except Exception as exc:
+        raise RuntimeError("Error updating staff in repository layer.") from exc
 
 async def delete_staff(staff_id: str) -> Dict[str, Any] | None:
     """
