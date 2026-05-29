@@ -76,6 +76,9 @@ from schemas.xapity_chat import (
 
 from schemas.auth import (
     AuthRegisterRequest,
+    AuthRegisterStartResponse,
+    AuthRegisterVerifyRequest,
+    AuthRegisterVerifyResponse,
     AuthLoginRequest,
     AuthLoginResponse,
     AuthMeResponse,
@@ -84,6 +87,8 @@ from schemas.auth import (
 
 from services.auth_service import (
     register_user,
+    start_user_registration,
+    verify_user_registration,
     login_user,
     get_user_by_id,
     SECRET_KEY,
@@ -268,6 +273,66 @@ def assert_maf_user(user: Dict[str, Any]) -> None:
 #             status_code=500,
 #             detail="Internal error while registering user.",
 #         ) from exc
+
+@app.post("/auth/register/start", response_model=AuthRegisterStartResponse)
+async def auth_register_start_endpoint(payload: AuthRegisterRequest):
+    """
+    Starts email-verified registration.
+
+    This endpoint does NOT create the final user.
+    It creates a pending registration and sends a 6-digit code by email.
+    """
+    try:
+        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+
+        return await start_user_registration(
+            payload=payload,
+            business_id=business_id,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while starting registration.",
+        ) from exc
+
+
+@app.post(
+    "/auth/register/verify",
+    response_model=AuthRegisterVerifyResponse,
+    status_code=201,
+)
+async def auth_register_verify_endpoint(payload: AuthRegisterVerifyRequest):
+    """
+    Verifies the email code and creates the final user.
+    """
+    try:
+        user = await verify_user_registration(
+            email=payload.email,
+            code=payload.code,
+        )
+
+        return {
+            "user": user,
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while verifying registration.",
+        ) from exc
 
 @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
 async def auth_register_endpoint(payload: AuthRegisterRequest):

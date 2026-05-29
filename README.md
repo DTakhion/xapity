@@ -4,12 +4,12 @@
 ## backend dev
 
 ```
-https://xapity-api-dev-179536772092.us-central1.run.app/docs
+https://xapity-api-dev-179536772092.us-central1.run.app/docs#/
 ```
 
 ## backend main
 ```
-https://xapity-api-prod-179536772092.us-central1.run.app/docs
+https://xapity-api-prod-179536772092.us-central1.run.app/docs#/
 ```
 
 ## firebase dev

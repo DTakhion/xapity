@@ -19,6 +19,12 @@ SERVICES_COLLECTION = os.getenv("SERVICES_COLLECTION", "services")
 STAFF_COLLECTION = os.getenv("STAFF_COLLECTION", "staff")
 APPOINTMENTS_COLLECTION = os.getenv("APPOINTMENTS_COLLECTION", "appointments")
 USERS_COLLECTION = os.getenv("USERS_COLLECTION", "users")
+
+PENDING_REGISTRATIONS_COLLECTION = os.getenv(
+    "PENDING_REGISTRATIONS_COLLECTION",
+    "pending_registrations",
+)
+
 MAF_RAG_QUERY_LOGS_COLLECTION = os.getenv(
     "MAF_RAG_QUERY_LOGS_COLLECTION",
     "maf_rag_query_logs",
@@ -74,6 +80,13 @@ def get_users_collection() -> Collection:
     """
     db = get_database()
     return db[USERS_COLLECTION]
+
+def get_pending_registrations_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for pending email registrations.
+    """
+    db = get_database()
+    return db[PENDING_REGISTRATIONS_COLLECTION]
 
 def get_maf_rag_query_logs_collection() -> Collection:
     """
@@ -555,6 +568,146 @@ def get_user_by_user_id(user_id: str) -> Optional[Dict[str, Any]]:
 
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving user by userId.") from exc
+
+def upsert_pending_registration(
+    pending_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Creates or replaces a pending registration by email.
+
+    Nota:
+    Si el usuario solicita registro varias veces con el mismo correo,
+    reemplazamos la solicitud pendiente anterior por la nueva.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        email = pending_document["email"]
+
+        document = collection.find_one_and_replace(
+            {"email": email},
+            pending_document,
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            document = collection.find_one({"email": email})
+
+        if not document:
+            raise RuntimeError("Pending registration was upserted but could not be retrieved.")
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error upserting pending registration into MongoDB.") from exc
+
+
+def get_pending_registration_by_email(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a pending registration by email.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        document = collection.find_one({
+            "email": email,
+            "usedAt": None,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving pending registration by email.") from exc
+
+
+def mark_pending_registration_used(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Marks a pending registration as used after successful verification.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$set": {
+                    "usedAt": datetime.now(timezone.utc),
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error marking pending registration as used.") from exc
+
+
+def increment_pending_registration_attempts(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Increments failed verification attempts for a pending registration.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$inc": {
+                    "attempts": 1,
+                },
+                "$set": {
+                    "updatedAt": datetime.now(timezone.utc),
+                },
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error incrementing pending registration attempts.") from exc
+
+
+def delete_pending_registration_by_email(
+    email: str,
+) -> bool:
+    """
+    Deletes a pending registration by email.
+    Useful for cleanup or re-registration flows.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        result = collection.delete_one({"email": email})
+
+        return result.deleted_count > 0
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error deleting pending registration.") from exc
     
 def insert_maf_rag_query_log(log_document: Dict[str, Any]) -> Dict[str, Any]:
     """
