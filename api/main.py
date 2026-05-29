@@ -10,12 +10,14 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone, date, timedelta
 
 # Esta es la importanción correcta para los endpoints de Staff
-from schemas.staff import StaffCreateRequest, StaffResponse
+from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
+
 #from services.staff_repo import create_staff, get_staff_list
 from services.staff_repo import (
     create_staff,
     get_staff_list,
     get_staff_by_id,
+    update_staff,
     delete_staff,
 )
 
@@ -74,6 +76,9 @@ from schemas.xapity_chat import (
 
 from schemas.auth import (
     AuthRegisterRequest,
+    AuthRegisterStartResponse,
+    AuthRegisterVerifyRequest,
+    AuthRegisterVerifyResponse,
     AuthLoginRequest,
     AuthLoginResponse,
     AuthMeResponse,
@@ -82,6 +87,8 @@ from schemas.auth import (
 
 from services.auth_service import (
     register_user,
+    start_user_registration,
+    verify_user_registration,
     login_user,
     get_user_by_id,
     SECRET_KEY,
@@ -266,6 +273,66 @@ def assert_maf_user(user: Dict[str, Any]) -> None:
 #             status_code=500,
 #             detail="Internal error while registering user.",
 #         ) from exc
+
+@app.post("/auth/register/start", response_model=AuthRegisterStartResponse)
+async def auth_register_start_endpoint(payload: AuthRegisterRequest):
+    """
+    Starts email-verified registration.
+
+    This endpoint does NOT create the final user.
+    It creates a pending registration and sends a 6-digit code by email.
+    """
+    try:
+        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+
+        return await start_user_registration(
+            payload=payload,
+            business_id=business_id,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while starting registration.",
+        ) from exc
+
+
+@app.post(
+    "/auth/register/verify",
+    response_model=AuthRegisterVerifyResponse,
+    status_code=201,
+)
+async def auth_register_verify_endpoint(payload: AuthRegisterVerifyRequest):
+    """
+    Verifies the email code and creates the final user.
+    """
+    try:
+        user = await verify_user_registration(
+            email=payload.email,
+            code=payload.code,
+        )
+
+        return {
+            "user": user,
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while verifying registration.",
+        ) from exc
 
 @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
 async def auth_register_endpoint(payload: AuthRegisterRequest):
@@ -1508,6 +1575,56 @@ async def get_staff_by_id_endpoint(staffId: str):
             status_code=500,
             detail="Internal error while retrieving staff member.",
         ) from exc
+
+# PATCH /staff/{staffId}
+
+@app.patch("/staff/{staffId}", response_model=StaffResponse)
+async def update_staff_endpoint(staffId: str, staff: StaffUpdateRequest):
+    """
+    Actualiza parcialmente un miembro del staff.
+
+    Reglas:
+    - Busca por staffId
+    - Solo actualiza staff activo y no eliminado
+    - Si no existe, está inactivo o eliminado, retorna 404
+    - Si no se envían campos para actualizar, retorna 400
+    - Siempre actualiza updatedAt
+    """
+
+    update_data = staff.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+    
+    update_data = staff.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+    
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+    
+    updated_staff = await update_staff(staffId, update_data)
+
+    # if "workingHours" in update_data and update_data["workingHours"] is not None:
+    #     update_data["workingHours"] = update_data["workingHours"].model_dump()
+
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+
+    updated_staff = await update_staff(staffId, update_data)
+
+    if not updated_staff:
+        raise HTTPException(
+            status_code=404,
+            detail="Staff not found, inactive, or deleted.",
+        )
+
+    return updated_staff
 
 # DELETE /staff/{staffId}
 
