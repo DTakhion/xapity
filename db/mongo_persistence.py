@@ -30,6 +30,11 @@ MAF_RAG_QUERY_LOGS_COLLECTION = os.getenv(
     "maf_rag_query_logs",
 )
 
+PASSWORD_RESET_CODES_COLLECTION = os.getenv(
+    "PASSWORD_RESET_CODES_COLLECTION",
+    "password_reset_codes",
+)
+
 _client: Optional[MongoClient] = None
 
 
@@ -87,6 +92,13 @@ def get_pending_registrations_collection() -> Collection:
     """
     db = get_database()
     return db[PENDING_REGISTRATIONS_COLLECTION]
+
+def get_password_reset_codes_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for password reset codes.
+    """
+    db = get_database()
+    return db[PASSWORD_RESET_CODES_COLLECTION]
 
 def get_maf_rag_query_logs_collection() -> Collection:
     """
@@ -708,6 +720,159 @@ def delete_pending_registration_by_email(
 
     except PyMongoError as exc:
         raise RuntimeError("Error deleting pending registration.") from exc
+
+def upsert_password_reset_code(
+    reset_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Creates or replaces a password reset code by email.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        email = reset_document["email"]
+
+        document = collection.find_one_and_replace(
+            {"email": email},
+            reset_document,
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            document = collection.find_one({"email": email})
+
+        if not document:
+            raise RuntimeError("Password reset code was upserted but could not be retrieved.")
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error upserting password reset code into MongoDB.") from exc
+
+
+def get_password_reset_code_by_email(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves an active password reset code by email.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        document = collection.find_one({
+            "email": email,
+            "usedAt": None,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving password reset code by email.") from exc
+
+
+def mark_password_reset_code_used(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Marks a password reset code as used after successful password reset.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$set": {
+                    "usedAt": now,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error marking password reset code as used.") from exc
+
+
+def increment_password_reset_attempts(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Increments failed verification attempts for a password reset code.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$inc": {
+                    "attempts": 1,
+                },
+                "$set": {
+                    "updatedAt": datetime.now(timezone.utc),
+                },
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error incrementing password reset attempts.") from exc
+
+
+def update_user_password_by_email(
+    email: str,
+    password_hash: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates a non-deleted user's password hash by email.
+    """
+    try:
+        collection = get_users_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "isDeleted": False,
+            },
+            {
+                "$set": {
+                    "passwordHash": password_hash,
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error updating user password by email.") from exc
     
 def insert_maf_rag_query_log(log_document: Dict[str, Any]) -> Dict[str, Any]:
     """
