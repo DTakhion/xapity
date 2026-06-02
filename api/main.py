@@ -83,6 +83,10 @@ from schemas.auth import (
     AuthLoginResponse,
     AuthMeResponse,
     AuthUserResponse,
+    AuthForgotPasswordRequest,
+    AuthForgotPasswordResponse,
+    AuthResetPasswordRequest,
+    AuthResetPasswordResponse,
 )
 
 from services.auth_service import (
@@ -91,6 +95,8 @@ from services.auth_service import (
     verify_user_registration,
     login_user,
     get_user_by_id,
+    start_password_reset,
+    reset_user_password,
     SECRET_KEY,
     ALGORITHM,
 )
@@ -388,6 +394,50 @@ async def auth_login_endpoint(payload: AuthLoginRequest):
             detail="Internal error while logging in.",
         ) from exc
 
+@app.post("/auth/forgot-password", response_model=AuthForgotPasswordResponse)
+async def auth_forgot_password_endpoint(payload: AuthForgotPasswordRequest):
+    """
+    Starts password reset flow.
+
+    Security:
+    Always returns a generic response to avoid revealing whether
+    the email is registered or not.
+    """
+    try:
+        return await start_password_reset(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while starting password reset.",
+        ) from exc
+
+
+@app.post("/auth/reset-password", response_model=AuthResetPasswordResponse)
+async def auth_reset_password_endpoint(payload: AuthResetPasswordRequest):
+    """
+    Resets password using a valid recovery code.
+    """
+    try:
+        return await reset_user_password(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while resetting password.",
+        ) from exc
 
 @app.get("/auth/me", response_model=AuthMeResponse)
 async def auth_me_endpoint(

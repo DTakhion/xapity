@@ -132,3 +132,62 @@ Equipo Xapity
         body_text=body_text,
         body_html=body_html,
     )
+
+def send_password_reset_email(
+    *,
+    to_email: str,
+    code: str,
+    expires_minutes: int,
+) -> None:
+    """
+    Sends the password reset code to the user's email.
+    """
+    subject = "Recupera tu contraseña en Xapity"
+
+    body_text = f"""
+Hola,
+
+Recibimos una solicitud para recuperar tu contraseña en Xapity.
+
+Tu código de recuperación es:
+
+{code}
+
+Este código expira en {expires_minutes} minutos.
+
+Si tú no solicitaste este cambio, puedes ignorar este correo.
+
+Equipo Xapity
+""".strip()
+
+    body_html = f"""
+<!doctype html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #111827;">
+    <h2>Recupera tu contraseña en Xapity</h2>
+
+    <p>Hola,</p>
+
+    <p>Recibimos una solicitud para recuperar tu contraseña en Xapity.</p>
+
+    <p>Tu código de recuperación es:</p>
+
+    <p style="font-size: 28px; font-weight: bold; letter-spacing: 4px;">
+      {code}
+    </p>
+
+    <p>Este código expira en <strong>{expires_minutes} minutos</strong>.</p>
+
+    <p>Si tú no solicitaste este cambio, puedes ignorar este correo.</p>
+
+    <p>Equipo Xapity</p>
+  </body>
+</html>
+""".strip()
+
+    send_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+    )
