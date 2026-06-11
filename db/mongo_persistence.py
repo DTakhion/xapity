@@ -35,6 +35,11 @@ PASSWORD_RESET_CODES_COLLECTION = os.getenv(
     "password_reset_codes",
 )
 
+USER_INVITATIONS_COLLECTION = os.getenv(
+    "USER_INVITATIONS_COLLECTION",
+    "user_invitations",
+)
+
 _client: Optional[MongoClient] = None
 
 
@@ -99,6 +104,13 @@ def get_password_reset_codes_collection() -> Collection:
     """
     db = get_database()
     return db[PASSWORD_RESET_CODES_COLLECTION]
+
+def get_user_invitations_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for user invitations.
+    """
+    db = get_database()
+    return db[USER_INVITATIONS_COLLECTION]
 
 def get_maf_rag_query_logs_collection() -> Collection:
     """
@@ -895,3 +907,77 @@ def insert_maf_rag_query_log(log_document: Dict[str, Any]) -> Dict[str, Any]:
 
     except PyMongoError as exc:
         raise RuntimeError("Error inserting MAF RAG query log into MongoDB.") from exc
+
+def insert_user_invitation(invitation_document: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inserts a user invitation document into MongoDB.
+    """
+    try:
+        collection = get_user_invitations_collection()
+
+        result = collection.insert_one(invitation_document)
+
+        inserted_document = collection.find_one({"_id": result.inserted_id})
+        if not inserted_document:
+            raise RuntimeError("User invitation was inserted but could not be retrieved.")
+
+        return serialize_mongo_document(inserted_document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error inserting user invitation into MongoDB.") from exc
+
+def get_user_invitation_by_token(
+    token: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves an active user invitation by token.
+    """
+    try:
+        collection = get_user_invitations_collection()
+
+        document = collection.find_one({
+            "token": token,
+            "usedAt": None,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving user invitation by token.") from exc
+
+
+def mark_user_invitation_used(
+    token: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Marks a user invitation as used after successful acceptance.
+    """
+    try:
+        collection = get_user_invitations_collection()
+
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "token": token,
+                "usedAt": None,
+            },
+            {
+                "$set": {
+                    "usedAt": now,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error marking user invitation as used.") from exc

@@ -87,6 +87,10 @@ from schemas.auth import (
     AuthForgotPasswordResponse,
     AuthResetPasswordRequest,
     AuthResetPasswordResponse,
+    AuthInviteUserRequest,
+    AuthInviteUserResponse,
+    AuthAcceptInvitationRequest,
+    AuthAcceptInvitationResponse,
 )
 
 from services.auth_service import (
@@ -97,6 +101,8 @@ from services.auth_service import (
     get_user_by_id,
     start_password_reset,
     reset_user_password,
+    invite_user,
+    accept_invitation,
     SECRET_KEY,
     ALGORITHM,
 )
@@ -245,6 +251,13 @@ def assert_maf_user(user: Dict[str, Any]) -> None:
         raise HTTPException(
             status_code=403,
             detail="Usuario no autorizado para acceder a Xapity MAF.",
+        )
+
+def assert_admin_user(user: Dict[str, Any]) -> None:
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Solo usuarios admin pueden invitar nuevos usuarios.",
         )
 
 # @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
@@ -449,6 +462,69 @@ async def auth_me_endpoint(
     return {
         "user": user,
     }
+
+@app.post("/auth/invitations", response_model=AuthInviteUserResponse, status_code=201)
+async def auth_invite_user_endpoint(
+    payload: AuthInviteUserRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    authorization = f"{credentials.scheme} {credentials.credentials}"
+    inviter_user = await get_current_auth_user(authorization)
+
+    assert_admin_user(inviter_user)
+
+    if str(inviter_user.get("businessId")) == str(MAF_BUSINESS_ID):
+        if not is_maf_email(payload.email):
+            raise HTTPException(
+                status_code=400,
+                detail="Solo se pueden invitar correos institucionales autorizados para MAF.",
+            )
+
+    try:
+        return await invite_user(
+            payload=payload,
+            inviter_user=inviter_user,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while creating invitation.",
+        ) from exc
+
+@app.post(
+    "/auth/invitations/accept",
+    response_model=AuthAcceptInvitationResponse,
+    status_code=201,
+)
+async def auth_accept_invitation_endpoint(payload: AuthAcceptInvitationRequest):
+    """
+    Accepts a pending invitation and creates the final user.
+    """
+    try:
+        user = await accept_invitation(payload)
+
+        return {
+            "user": user,
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while accepting invitation.",
+        ) from exc
 
 @app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
 async def xapity_maf_chat_endpoint(

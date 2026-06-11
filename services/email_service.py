@@ -191,3 +191,74 @@ Equipo Xapity
         body_text=body_text,
         body_html=body_html,
     )
+
+def send_invitation_email(
+    *,
+    to_email: str,
+    invited_by_name: str,
+    organization_name: str,
+    invitation_url: str,
+    expires_hours: int,
+) -> None:
+    """
+    Sends an invitation email to join Xapity.
+    """
+    subject = f"Invitación a Xapity - {organization_name}"
+
+    body_text = f"""
+Hola,
+
+{invited_by_name} te ha invitado a unirte a Xapity para la organización {organization_name}.
+
+Para aceptar la invitación y crear tu contraseña, ingresa al siguiente enlace:
+
+{invitation_url}
+
+Este enlace expira en {expires_hours} horas.
+
+Si no esperabas esta invitación, puedes ignorar este correo.
+
+Equipo Xapity
+""".strip()
+
+    body_html = f"""
+<!doctype html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #111827;">
+    <h2>Invitación a Xapity</h2>
+
+    <p>Hola,</p>
+
+    <p>
+      <strong>{invited_by_name}</strong> te ha invitado a unirte a Xapity
+      para la organización <strong>{organization_name}</strong>.
+    </p>
+
+    <p>Para aceptar la invitación y crear tu contraseña, haz clic en el siguiente enlace:</p>
+
+    <p>
+      <a href="{invitation_url}"
+         style="display: inline-block; padding: 10px 16px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 6px;">
+        Aceptar invitación
+      </a>
+    </p>
+
+    <p>O copia y pega este enlace en tu navegador:</p>
+
+    <p style="word-break: break-all;">{invitation_url}</p>
+
+    <p>Este enlace expira en <strong>{expires_hours} horas</strong>.</p>
+
+    <p>Si no esperabas esta invitación, puedes ignorar este correo.</p>
+
+    <p>Equipo Xapity</p>
+  </body>
+</html>
+""".strip()
+
+    send_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+    )

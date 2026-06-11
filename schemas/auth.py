@@ -8,7 +8,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
-UserRole = Literal["admin", "staff", "customer"]
+UserRole = Literal["admin", "staff", "customer", "user"]
 
 
 class AuthRegisterRequest(BaseModel):
@@ -82,3 +82,24 @@ class AuthResetPasswordRequest(BaseModel):
 class AuthResetPasswordResponse(BaseModel):
     ok: bool = True
     message: str
+
+class AuthInviteUserRequest(BaseModel):
+    email: EmailStr
+    role: UserRole = Field(default="user")
+
+
+class AuthInviteUserResponse(BaseModel):
+    ok: bool = True
+    message: str
+    email: EmailStr
+    role: UserRole
+
+class AuthAcceptInvitationRequest(BaseModel):
+    token: str = Field(..., min_length=20)
+    name: str = Field(..., min_length=3, max_length=120)
+    password: str = Field(..., min_length=6, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=40)
+
+
+class AuthAcceptInvitationResponse(BaseModel):
+    user: AuthUserResponse

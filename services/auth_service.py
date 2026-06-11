@@ -17,6 +17,8 @@ from schemas.auth import (
     AuthLoginRequest,
     AuthForgotPasswordRequest,
     AuthResetPasswordRequest,
+    AuthInviteUserRequest,
+    AuthAcceptInvitationRequest,
 )
 
 from db.mongo_persistence import (
@@ -32,11 +34,15 @@ from db.mongo_persistence import (
     mark_password_reset_code_used,
     increment_password_reset_attempts,
     update_user_password_by_email,
+    insert_user_invitation,
+    get_user_invitation_by_token,
+    mark_user_invitation_used,
 )
 
 from services.email_service import (
     send_registration_verification_email,
     send_password_reset_email,
+    send_invitation_email,
 )
 
 load_dotenv()
@@ -65,6 +71,15 @@ PASSWORD_RESET_CODE_EXPIRE_MINUTES = int(
 
 PASSWORD_RESET_MAX_ATTEMPTS = int(
     os.getenv("PASSWORD_RESET_MAX_ATTEMPTS", "5")
+)
+
+INVITATION_EXPIRE_HOURS = int(
+    os.getenv("INVITATION_EXPIRE_HOURS", "48")
+)
+
+FRONTEND_BASE_URL = os.getenv(
+    "FRONTEND_BASE_URL",
+    "http://localhost:5173",
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -354,6 +369,119 @@ async def register_user(
     }
 
     inserted_user = insert_user(user_doc)
+    inserted_user.pop("passwordHash", None)
+
+    return inserted_user
+
+async def invite_user(
+    *,
+    payload: AuthInviteUserRequest,
+    inviter_user: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Creates a pending invitation for a user within the inviter's business.
+    Domain validation must be handled by the API layer.
+    """
+    normalized_email = str(payload.email).strip().lower()
+
+    existing_user = get_user_by_email(normalized_email)
+
+    if existing_user:
+        raise ValueError("El correo ya está registrado")
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=INVITATION_EXPIRE_HOURS)
+
+    token = str(uuid.uuid4())
+
+    invitation_doc = {
+        "invitationId": str(uuid.uuid4()),
+        "businessId": inviter_user["businessId"],
+        "organizationName": inviter_user.get("organizationName"),
+        "email": normalized_email,
+        "role": payload.role,
+        "invitedByUserId": inviter_user.get("userId"),
+        "invitedByEmail": inviter_user.get("email"),
+        "token": token,
+        "expiresAt": expires_at,
+        "usedAt": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    inserted_invitation = insert_user_invitation(invitation_doc)
+
+    invitation_url = f"{FRONTEND_BASE_URL}/accept-invitation?token={token}"
+
+    send_invitation_email(
+        to_email=normalized_email,
+        invited_by_name=inviter_user.get("name", "Un administrador"),
+        organization_name=inviter_user.get("organizationName", "tu organización"),
+        invitation_url=invitation_url,
+        expires_hours=INVITATION_EXPIRE_HOURS,
+    )
+
+    return {
+        "ok": True,
+        "message": "Invitación enviada correctamente.",
+        "email": normalized_email,
+        "role": payload.role,
+    }
+
+async def accept_invitation(
+    payload: AuthAcceptInvitationRequest,
+) -> Dict[str, Any]:
+    """
+    Accepts a pending invitation and creates the final user.
+    """
+    token = str(payload.token).strip()
+
+    invitation = get_user_invitation_by_token(token)
+
+    if not invitation:
+        raise ValueError("Invitación inválida o ya utilizada")
+
+    now = datetime.now(timezone.utc)
+
+    expires_at = invitation.get("expiresAt")
+
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at and expires_at < now:
+        raise ValueError("La invitación expiró")
+
+    normalized_email = str(invitation["email"]).strip().lower()
+
+    existing_user = get_user_by_email(normalized_email)
+
+    if existing_user:
+        raise ValueError("El correo ya está registrado")
+
+    user_doc = {
+        "userId": str(uuid.uuid4()),
+        "businessId": invitation["businessId"],
+        "name": payload.name,
+        "email": normalized_email,
+        "passwordHash": hash_password(payload.password),
+        "phone": payload.phone,
+        "organizationName": invitation.get("organizationName"),
+        "role": invitation.get("role", "user"),
+        "authProvider": "local",
+        "isEmailVerified": True,
+        "isActive": True,
+        "isDeleted": False,
+        "createdAt": now,
+        "updatedAt": now,
+        "invitedByUserId": invitation.get("invitedByUserId"),
+        "invitedByEmail": invitation.get("invitedByEmail"),
+        "invitationId": invitation.get("invitationId"),
+    }
+
+    inserted_user = insert_user(user_doc)
+
+    mark_user_invitation_used(token)
+
     inserted_user.pop("passwordHash", None)
 
     return inserted_user
