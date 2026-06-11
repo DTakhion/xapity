@@ -1,18 +1,26 @@
 # xapity
 
 # deploy 
-## xapity-api-dev
+## backend dev
 
 ```
-https://xapity-api-dev-179536772092.us-central1.run.app
+https://xapity-api-dev-179536772092.us-central1.run.app/docs#/
 ```
 
-## xapity-api-prod
-
+## backend main
 ```
-https://xapity-api-prod-179536772092.us-central1.run.app
+https://xapity-api-prod-179536772092.us-central1.run.app/docs#/
 ```
 
+## firebase dev
+```
+https://xapity-45d11.web.app
+```
+
+## firebase main
+```
+https://xapity-prod.web.app
+```
 
 Laboratorio para pruebas de integración LLM + Middleware (QiCore).
 

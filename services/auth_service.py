@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
@@ -11,12 +12,37 @@ from dotenv import load_dotenv
 from passlib.context import CryptContext
 from jose import jwt
 
-from schemas.auth import AuthRegisterRequest, AuthLoginRequest
+from schemas.auth import (
+    AuthRegisterRequest,
+    AuthLoginRequest,
+    AuthForgotPasswordRequest,
+    AuthResetPasswordRequest,
+    AuthInviteUserRequest,
+    AuthAcceptInvitationRequest,
+)
 
 from db.mongo_persistence import (
     insert_user,
     get_user_by_email,
     get_user_by_user_id,
+    upsert_pending_registration,
+    get_pending_registration_by_email,
+    mark_pending_registration_used,
+    increment_pending_registration_attempts,
+    upsert_password_reset_code,
+    get_password_reset_code_by_email,
+    mark_password_reset_code_used,
+    increment_password_reset_attempts,
+    update_user_password_by_email,
+    insert_user_invitation,
+    get_user_invitation_by_token,
+    mark_user_invitation_used,
+)
+
+from services.email_service import (
+    send_registration_verification_email,
+    send_password_reset_email,
+    send_invitation_email,
 )
 
 load_dotenv()
@@ -29,6 +55,31 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "CHANGE_THIS_IN_ENV")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(
     os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 8))
+)
+
+REGISTRATION_CODE_EXPIRE_MINUTES = int(
+    os.getenv("REGISTRATION_CODE_EXPIRE_MINUTES", "15")
+)
+
+REGISTRATION_MAX_ATTEMPTS = int(
+    os.getenv("REGISTRATION_MAX_ATTEMPTS", "5")
+)
+
+PASSWORD_RESET_CODE_EXPIRE_MINUTES = int(
+    os.getenv("PASSWORD_RESET_CODE_EXPIRE_MINUTES", "15")
+)
+
+PASSWORD_RESET_MAX_ATTEMPTS = int(
+    os.getenv("PASSWORD_RESET_MAX_ATTEMPTS", "5")
+)
+
+INVITATION_EXPIRE_HOURS = int(
+    os.getenv("INVITATION_EXPIRE_HOURS", "48")
+)
+
+FRONTEND_BASE_URL = os.getenv(
+    "FRONTEND_BASE_URL",
+    "http://localhost:5173",
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -51,6 +102,54 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Compara una contraseña ingresada contra el hash almacenado.
     """
     return pwd_context.verify(plain_password, hashed_password)
+
+# ============================================================
+# HELPERS REGISTRATION CODE
+# ============================================================
+
+def generate_registration_code() -> str:
+    """
+    Generates a 6-digit numeric registration verification code.
+    """
+    return f"{random.randint(0, 999999):06d}"
+
+
+def hash_registration_code(code: str) -> str:
+    """
+    Hashes the verification code before storing it.
+    """
+    return pwd_context.hash(code)
+
+
+def verify_registration_code(plain_code: str, hashed_code: str) -> bool:
+    """
+    Verifies a plain verification code against the stored hash.
+    """
+    return pwd_context.verify(plain_code, hashed_code)
+
+# ============================================================
+# HELPERS PASSWORD RESET CODE
+# ============================================================
+
+def generate_password_reset_code() -> str:
+    """
+    Generates a 6-digit numeric password reset code.
+    """
+    return f"{random.randint(0, 999999):06d}"
+
+
+def hash_password_reset_code(code: str) -> str:
+    """
+    Hashes the password reset code before storing it.
+    """
+    return pwd_context.hash(code)
+
+
+def verify_password_reset_code(plain_code: str, hashed_code: str) -> bool:
+    """
+    Verifies a plain password reset code against the stored hash.
+    """
+    return pwd_context.verify(plain_code, hashed_code)
 
 
 # ============================================================
@@ -115,6 +214,125 @@ def create_access_token(data: dict) -> str:
 
 #     return inserted_user
 
+async def start_user_registration(
+    payload: AuthRegisterRequest,
+    business_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Starts a pending user registration.
+
+    This does NOT create the final user yet.
+    It stores a pending registration and sends a verification code by email.
+    """
+    existing_user = get_user_by_email(payload.email)
+
+    if existing_user:
+        raise ValueError("El correo ya está registrado")
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=REGISTRATION_CODE_EXPIRE_MINUTES)
+
+    code = generate_registration_code()
+
+    pending_doc = {
+        "pendingRegistrationId": str(uuid.uuid4()),
+        "businessId": business_id or str(uuid.uuid4()),
+        "name": payload.name,
+        "email": str(payload.email).strip().lower(),
+        "passwordHash": hash_password(payload.password),
+        "phone": payload.phone,
+        "organizationName": payload.organizationName,
+        "role": payload.role,
+        "verificationCodeHash": hash_registration_code(code),
+        "expiresAt": expires_at,
+        "attempts": 0,
+        "usedAt": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    upsert_pending_registration(pending_doc)
+
+    send_registration_verification_email(
+        to_email=pending_doc["email"],
+        code=code,
+        expires_minutes=REGISTRATION_CODE_EXPIRE_MINUTES,
+    )
+
+    return {
+        "ok": True,
+        "message": "Código de verificación enviado al correo.",
+        "email": pending_doc["email"],
+    }
+
+
+async def verify_user_registration(
+    email: str,
+    code: str,
+) -> Dict[str, Any]:
+    """
+    Verifies a pending registration code and creates the final user.
+    """
+    normalized_email = str(email).strip().lower()
+
+    existing_user = get_user_by_email(normalized_email)
+
+    if existing_user:
+        raise ValueError("El correo ya está registrado")
+
+    pending = get_pending_registration_by_email(normalized_email)
+
+    if not pending:
+        raise ValueError("No existe una solicitud pendiente para este correo")
+
+    now = datetime.now(timezone.utc)
+
+    expires_at = pending.get("expiresAt")
+    
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    
+    if expires_at and expires_at < now:
+        raise ValueError("El código de verificación expiró")
+
+    attempts = int(pending.get("attempts") or 0)
+
+    if attempts >= REGISTRATION_MAX_ATTEMPTS:
+        raise ValueError("Se superó el máximo de intentos de verificación")
+
+    verification_code_hash = pending.get("verificationCodeHash")
+
+    if not verification_code_hash:
+        raise ValueError("Solicitud de verificación inválida")
+
+    if not verify_registration_code(code, verification_code_hash):
+        increment_pending_registration_attempts(normalized_email)
+        raise ValueError("Código de verificación inválido")
+
+    user_doc = {
+        "userId": str(uuid.uuid4()),
+        "businessId": pending["businessId"],
+        "name": pending["name"],
+        "email": pending["email"],
+        "passwordHash": pending["passwordHash"],
+        "phone": pending.get("phone"),
+        "organizationName": pending["organizationName"],
+        "role": pending["role"],
+        "authProvider": "local",
+        "isEmailVerified": True,
+        "isActive": True,
+        "isDeleted": False,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    inserted_user = insert_user(user_doc)
+    mark_pending_registration_used(normalized_email)
+
+    inserted_user.pop("passwordHash", None)
+
+    return inserted_user
+
 async def register_user(
     payload: AuthRegisterRequest,
     business_id: Optional[str] = None,
@@ -154,6 +372,237 @@ async def register_user(
     inserted_user.pop("passwordHash", None)
 
     return inserted_user
+
+async def invite_user(
+    *,
+    payload: AuthInviteUserRequest,
+    inviter_user: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Creates a pending invitation for a user within the inviter's business.
+    Domain validation must be handled by the API layer.
+    """
+    normalized_email = str(payload.email).strip().lower()
+
+    existing_user = get_user_by_email(normalized_email)
+
+    if existing_user:
+        raise ValueError("El correo ya está registrado")
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=INVITATION_EXPIRE_HOURS)
+
+    token = str(uuid.uuid4())
+
+    invitation_doc = {
+        "invitationId": str(uuid.uuid4()),
+        "businessId": inviter_user["businessId"],
+        "organizationName": inviter_user.get("organizationName"),
+        "email": normalized_email,
+        "role": payload.role,
+        "invitedByUserId": inviter_user.get("userId"),
+        "invitedByEmail": inviter_user.get("email"),
+        "token": token,
+        "expiresAt": expires_at,
+        "usedAt": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    inserted_invitation = insert_user_invitation(invitation_doc)
+
+    invitation_url = f"{FRONTEND_BASE_URL}/accept-invitation?token={token}"
+
+    send_invitation_email(
+        to_email=normalized_email,
+        invited_by_name=inviter_user.get("name", "Un administrador"),
+        organization_name=inviter_user.get("organizationName", "tu organización"),
+        invitation_url=invitation_url,
+        expires_hours=INVITATION_EXPIRE_HOURS,
+    )
+
+    return {
+        "ok": True,
+        "message": "Invitación enviada correctamente.",
+        "email": normalized_email,
+        "role": payload.role,
+    }
+
+async def accept_invitation(
+    payload: AuthAcceptInvitationRequest,
+) -> Dict[str, Any]:
+    """
+    Accepts a pending invitation and creates the final user.
+    """
+    token = str(payload.token).strip()
+
+    invitation = get_user_invitation_by_token(token)
+
+    if not invitation:
+        raise ValueError("Invitación inválida o ya utilizada")
+
+    now = datetime.now(timezone.utc)
+
+    expires_at = invitation.get("expiresAt")
+
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at and expires_at < now:
+        raise ValueError("La invitación expiró")
+
+    normalized_email = str(invitation["email"]).strip().lower()
+
+    existing_user = get_user_by_email(normalized_email)
+
+    if existing_user:
+        raise ValueError("El correo ya está registrado")
+
+    user_doc = {
+        "userId": str(uuid.uuid4()),
+        "businessId": invitation["businessId"],
+        "name": payload.name,
+        "email": normalized_email,
+        "passwordHash": hash_password(payload.password),
+        "phone": payload.phone,
+        "organizationName": invitation.get("organizationName"),
+        "role": invitation.get("role", "user"),
+        "authProvider": "local",
+        "isEmailVerified": True,
+        "isActive": True,
+        "isDeleted": False,
+        "createdAt": now,
+        "updatedAt": now,
+        "invitedByUserId": invitation.get("invitedByUserId"),
+        "invitedByEmail": invitation.get("invitedByEmail"),
+        "invitationId": invitation.get("invitationId"),
+    }
+
+    inserted_user = insert_user(user_doc)
+
+    mark_user_invitation_used(token)
+
+    inserted_user.pop("passwordHash", None)
+
+    return inserted_user
+
+# ============================================================
+# PASSWORD RESET
+# ============================================================
+
+async def start_password_reset(
+    payload: AuthForgotPasswordRequest,
+) -> Dict[str, Any]:
+    """
+    Starts a password reset flow.
+
+    Security note:
+    Always returns a generic success response to avoid leaking
+    whether an email is registered or not.
+    """
+    normalized_email = str(payload.email).strip().lower()
+
+    user = get_user_by_email(normalized_email)
+
+    generic_response = {
+        "ok": True,
+        "message": "Si el correo existe, enviaremos un código de recuperación.",
+    }
+
+    if not user:
+        return generic_response
+
+    if not user.get("isActive", True):
+        return generic_response
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=PASSWORD_RESET_CODE_EXPIRE_MINUTES)
+
+    code = generate_password_reset_code()
+
+    reset_doc = {
+        "passwordResetId": str(uuid.uuid4()),
+        "email": normalized_email,
+        "passwordResetCodeHash": hash_password_reset_code(code),
+        "expiresAt": expires_at,
+        "attempts": 0,
+        "usedAt": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    upsert_password_reset_code(reset_doc)
+
+    send_password_reset_email(
+        to_email=normalized_email,
+        code=code,
+        expires_minutes=PASSWORD_RESET_CODE_EXPIRE_MINUTES,
+    )
+
+    return generic_response
+
+
+async def reset_user_password(
+    payload: AuthResetPasswordRequest,
+) -> Dict[str, Any]:
+    """
+    Resets the user's password using a valid password reset code.
+    """
+    normalized_email = str(payload.email).strip().lower()
+
+    user = get_user_by_email(normalized_email)
+
+    if not user:
+        raise ValueError("Solicitud de recuperación inválida")
+
+    if not user.get("isActive", True):
+        raise ValueError("Solicitud de recuperación inválida")
+
+    reset_request = get_password_reset_code_by_email(normalized_email)
+
+    if not reset_request:
+        raise ValueError("No existe una solicitud activa de recuperación")
+
+    now = datetime.now(timezone.utc)
+
+    expires_at = reset_request.get("expiresAt")
+
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at and expires_at < now:
+        raise ValueError("El código de recuperación expiró")
+
+    attempts = int(reset_request.get("attempts") or 0)
+
+    if attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+        raise ValueError("Se superó el máximo de intentos de recuperación")
+
+    password_reset_code_hash = reset_request.get("passwordResetCodeHash")
+
+    if not password_reset_code_hash:
+        raise ValueError("Solicitud de recuperación inválida")
+
+    if not verify_password_reset_code(payload.code, password_reset_code_hash):
+        increment_password_reset_attempts(normalized_email)
+        raise ValueError("Código de recuperación inválido")
+
+    new_password_hash = hash_password(payload.newPassword)
+
+    updated_user = update_user_password_by_email(
+        normalized_email,
+        new_password_hash,
+    )
+
+    if not updated_user:
+        raise ValueError("No fue posible actualizar la contraseña")
+
+    mark_password_reset_code_used(normalized_email)
+
+    return {
+        "ok": True,
+        "message": "Contraseña actualizada correctamente.",
+    }
 
 # ============================================================
 # LOGIN

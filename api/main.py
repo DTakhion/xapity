@@ -10,9 +10,16 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone, date, timedelta
 
 # Esta es la importanción correcta para los endpoints de Staff
-from schemas.staff import StaffCreateRequest, StaffResponse
+from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
+
 #from services.staff_repo import create_staff, get_staff_list
-from services.staff_repo import create_staff, get_staff_list, delete_staff
+from services.staff_repo import (
+    create_staff,
+    get_staff_list,
+    get_staff_by_id,
+    update_staff,
+    delete_staff,
+)
 
 # @app.post("/staff", response_model=StaffResponse)
 # def create_staff_endpoint(staff: StaffCreate):
@@ -69,16 +76,33 @@ from schemas.xapity_chat import (
 
 from schemas.auth import (
     AuthRegisterRequest,
+    AuthRegisterStartResponse,
+    AuthRegisterVerifyRequest,
+    AuthRegisterVerifyResponse,
     AuthLoginRequest,
     AuthLoginResponse,
     AuthMeResponse,
     AuthUserResponse,
+    AuthForgotPasswordRequest,
+    AuthForgotPasswordResponse,
+    AuthResetPasswordRequest,
+    AuthResetPasswordResponse,
+    AuthInviteUserRequest,
+    AuthInviteUserResponse,
+    AuthAcceptInvitationRequest,
+    AuthAcceptInvitationResponse,
 )
 
 from services.auth_service import (
     register_user,
+    start_user_registration,
+    verify_user_registration,
     login_user,
     get_user_by_id,
+    start_password_reset,
+    reset_user_password,
+    invite_user,
+    accept_invitation,
     SECRET_KEY,
     ALGORITHM,
 )
@@ -229,6 +253,13 @@ def assert_maf_user(user: Dict[str, Any]) -> None:
             detail="Usuario no autorizado para acceder a Xapity MAF.",
         )
 
+def assert_admin_user(user: Dict[str, Any]) -> None:
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Solo usuarios admin pueden invitar nuevos usuarios.",
+        )
+
 # @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
 # async def auth_register_endpoint(payload: AuthRegisterRequest):
 #     """
@@ -261,6 +292,66 @@ def assert_maf_user(user: Dict[str, Any]) -> None:
 #             status_code=500,
 #             detail="Internal error while registering user.",
 #         ) from exc
+
+@app.post("/auth/register/start", response_model=AuthRegisterStartResponse)
+async def auth_register_start_endpoint(payload: AuthRegisterRequest):
+    """
+    Starts email-verified registration.
+
+    This endpoint does NOT create the final user.
+    It creates a pending registration and sends a 6-digit code by email.
+    """
+    try:
+        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+
+        return await start_user_registration(
+            payload=payload,
+            business_id=business_id,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while starting registration.",
+        ) from exc
+
+
+@app.post(
+    "/auth/register/verify",
+    response_model=AuthRegisterVerifyResponse,
+    status_code=201,
+)
+async def auth_register_verify_endpoint(payload: AuthRegisterVerifyRequest):
+    """
+    Verifies the email code and creates the final user.
+    """
+    try:
+        user = await verify_user_registration(
+            email=payload.email,
+            code=payload.code,
+        )
+
+        return {
+            "user": user,
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while verifying registration.",
+        ) from exc
 
 @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
 async def auth_register_endpoint(payload: AuthRegisterRequest):
@@ -316,6 +407,50 @@ async def auth_login_endpoint(payload: AuthLoginRequest):
             detail="Internal error while logging in.",
         ) from exc
 
+@app.post("/auth/forgot-password", response_model=AuthForgotPasswordResponse)
+async def auth_forgot_password_endpoint(payload: AuthForgotPasswordRequest):
+    """
+    Starts password reset flow.
+
+    Security:
+    Always returns a generic response to avoid revealing whether
+    the email is registered or not.
+    """
+    try:
+        return await start_password_reset(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while starting password reset.",
+        ) from exc
+
+
+@app.post("/auth/reset-password", response_model=AuthResetPasswordResponse)
+async def auth_reset_password_endpoint(payload: AuthResetPasswordRequest):
+    """
+    Resets password using a valid recovery code.
+    """
+    try:
+        return await reset_user_password(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while resetting password.",
+        ) from exc
 
 @app.get("/auth/me", response_model=AuthMeResponse)
 async def auth_me_endpoint(
@@ -327,6 +462,69 @@ async def auth_me_endpoint(
     return {
         "user": user,
     }
+
+@app.post("/auth/invitations", response_model=AuthInviteUserResponse, status_code=201)
+async def auth_invite_user_endpoint(
+    payload: AuthInviteUserRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    authorization = f"{credentials.scheme} {credentials.credentials}"
+    inviter_user = await get_current_auth_user(authorization)
+
+    assert_admin_user(inviter_user)
+
+    if str(inviter_user.get("businessId")) == str(MAF_BUSINESS_ID):
+        if not is_maf_email(payload.email):
+            raise HTTPException(
+                status_code=400,
+                detail="Solo se pueden invitar correos institucionales autorizados para MAF.",
+            )
+
+    try:
+        return await invite_user(
+            payload=payload,
+            inviter_user=inviter_user,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while creating invitation.",
+        ) from exc
+
+@app.post(
+    "/auth/invitations/accept",
+    response_model=AuthAcceptInvitationResponse,
+    status_code=201,
+)
+async def auth_accept_invitation_endpoint(payload: AuthAcceptInvitationRequest):
+    """
+    Accepts a pending invitation and creates the final user.
+    """
+    try:
+        user = await accept_invitation(payload)
+
+        return {
+            "user": user,
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while accepting invitation.",
+        ) from exc
 
 @app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
 async def xapity_maf_chat_endpoint(
@@ -1470,6 +1668,89 @@ async def get_staff_endpoint():
             status_code=500,
             detail="Internal error while retrieving staff."
         ) from exc
+
+# GET /staff/{staffId}
+
+@app.get("/staff/{staffId}", response_model=StaffResponse)
+async def get_staff_by_id_endpoint(staffId: str):
+    """
+    Obtiene un miembro específico del staff por staffId.
+
+    Reglas:
+    - Busca por staffId
+    - Solo retorna staff no eliminado
+    - Si no existe o está eliminado, retorna 404
+    """
+
+    try:
+        staff = await get_staff_by_id(staffId)
+
+        if not staff:
+            raise HTTPException(
+                status_code=404,
+                detail="Staff not found.",
+            )
+
+        return staff
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving staff member.",
+        ) from exc
+
+# PATCH /staff/{staffId}
+
+@app.patch("/staff/{staffId}", response_model=StaffResponse)
+async def update_staff_endpoint(staffId: str, staff: StaffUpdateRequest):
+    """
+    Actualiza parcialmente un miembro del staff.
+
+    Reglas:
+    - Busca por staffId
+    - Solo actualiza staff activo y no eliminado
+    - Si no existe, está inactivo o eliminado, retorna 404
+    - Si no se envían campos para actualizar, retorna 400
+    - Siempre actualiza updatedAt
+    """
+
+    update_data = staff.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+    
+    update_data = staff.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update.",
+        )
+    
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+    
+    updated_staff = await update_staff(staffId, update_data)
+
+    # if "workingHours" in update_data and update_data["workingHours"] is not None:
+    #     update_data["workingHours"] = update_data["workingHours"].model_dump()
+
+    update_data["updatedAt"] = datetime.now(timezone.utc)
+
+    updated_staff = await update_staff(staffId, update_data)
+
+    if not updated_staff:
+        raise HTTPException(
+            status_code=404,
+            detail="Staff not found, inactive, or deleted.",
+        )
+
+    return updated_staff
 
 # DELETE /staff/{staffId}
 

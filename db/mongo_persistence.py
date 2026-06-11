@@ -19,9 +19,25 @@ SERVICES_COLLECTION = os.getenv("SERVICES_COLLECTION", "services")
 STAFF_COLLECTION = os.getenv("STAFF_COLLECTION", "staff")
 APPOINTMENTS_COLLECTION = os.getenv("APPOINTMENTS_COLLECTION", "appointments")
 USERS_COLLECTION = os.getenv("USERS_COLLECTION", "users")
+
+PENDING_REGISTRATIONS_COLLECTION = os.getenv(
+    "PENDING_REGISTRATIONS_COLLECTION",
+    "pending_registrations",
+)
+
 MAF_RAG_QUERY_LOGS_COLLECTION = os.getenv(
     "MAF_RAG_QUERY_LOGS_COLLECTION",
     "maf_rag_query_logs",
+)
+
+PASSWORD_RESET_CODES_COLLECTION = os.getenv(
+    "PASSWORD_RESET_CODES_COLLECTION",
+    "password_reset_codes",
+)
+
+USER_INVITATIONS_COLLECTION = os.getenv(
+    "USER_INVITATIONS_COLLECTION",
+    "user_invitations",
 )
 
 _client: Optional[MongoClient] = None
@@ -74,6 +90,27 @@ def get_users_collection() -> Collection:
     """
     db = get_database()
     return db[USERS_COLLECTION]
+
+def get_pending_registrations_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for pending email registrations.
+    """
+    db = get_database()
+    return db[PENDING_REGISTRATIONS_COLLECTION]
+
+def get_password_reset_codes_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for password reset codes.
+    """
+    db = get_database()
+    return db[PASSWORD_RESET_CODES_COLLECTION]
+
+def get_user_invitations_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for user invitations.
+    """
+    db = get_database()
+    return db[USER_INVITATIONS_COLLECTION]
 
 def get_maf_rag_query_logs_collection() -> Collection:
     """
@@ -296,6 +333,50 @@ def get_staff(
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving staff from MongoDB.") from exc
 
+def get_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a single staff member by its internal staffId.
+    """
+    try:
+        collection = get_staff_collection()
+
+        document = collection.find_one({
+            "staffId": staff_id,
+            "isDeleted": False,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving staff by staffId.") from exc
+
+def update_staff_by_staff_id(
+    staff_id: str,
+    update_fields: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates a staff member by staffId and returns the updated document.
+    """
+    try:
+        collection = get_staff_collection()
+
+        document = collection.find_one_and_update(
+            {"staffId": staff_id, "isDeleted": False, "isActive": True},
+            {"$set": update_fields},
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error updating staff by staffId.") from exc
+
 def soft_delete_staff_by_staff_id(staff_id: str) -> Optional[Dict[str, Any]]:
     """
     Soft deletes a staff member by staffId and returns the updated document.
@@ -511,6 +592,299 @@ def get_user_by_user_id(user_id: str) -> Optional[Dict[str, Any]]:
 
     except PyMongoError as exc:
         raise RuntimeError("Error retrieving user by userId.") from exc
+
+def upsert_pending_registration(
+    pending_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Creates or replaces a pending registration by email.
+
+    Nota:
+    Si el usuario solicita registro varias veces con el mismo correo,
+    reemplazamos la solicitud pendiente anterior por la nueva.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        email = pending_document["email"]
+
+        document = collection.find_one_and_replace(
+            {"email": email},
+            pending_document,
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            document = collection.find_one({"email": email})
+
+        if not document:
+            raise RuntimeError("Pending registration was upserted but could not be retrieved.")
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error upserting pending registration into MongoDB.") from exc
+
+
+def get_pending_registration_by_email(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a pending registration by email.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        document = collection.find_one({
+            "email": email,
+            "usedAt": None,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving pending registration by email.") from exc
+
+
+def mark_pending_registration_used(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Marks a pending registration as used after successful verification.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$set": {
+                    "usedAt": datetime.now(timezone.utc),
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error marking pending registration as used.") from exc
+
+
+def increment_pending_registration_attempts(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Increments failed verification attempts for a pending registration.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$inc": {
+                    "attempts": 1,
+                },
+                "$set": {
+                    "updatedAt": datetime.now(timezone.utc),
+                },
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error incrementing pending registration attempts.") from exc
+
+
+def delete_pending_registration_by_email(
+    email: str,
+) -> bool:
+    """
+    Deletes a pending registration by email.
+    Useful for cleanup or re-registration flows.
+    """
+    try:
+        collection = get_pending_registrations_collection()
+
+        result = collection.delete_one({"email": email})
+
+        return result.deleted_count > 0
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error deleting pending registration.") from exc
+
+def upsert_password_reset_code(
+    reset_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Creates or replaces a password reset code by email.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        email = reset_document["email"]
+
+        document = collection.find_one_and_replace(
+            {"email": email},
+            reset_document,
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            document = collection.find_one({"email": email})
+
+        if not document:
+            raise RuntimeError("Password reset code was upserted but could not be retrieved.")
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error upserting password reset code into MongoDB.") from exc
+
+
+def get_password_reset_code_by_email(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves an active password reset code by email.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        document = collection.find_one({
+            "email": email,
+            "usedAt": None,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving password reset code by email.") from exc
+
+
+def mark_password_reset_code_used(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Marks a password reset code as used after successful password reset.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$set": {
+                    "usedAt": now,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error marking password reset code as used.") from exc
+
+
+def increment_password_reset_attempts(
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Increments failed verification attempts for a password reset code.
+    """
+    try:
+        collection = get_password_reset_codes_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "usedAt": None,
+            },
+            {
+                "$inc": {
+                    "attempts": 1,
+                },
+                "$set": {
+                    "updatedAt": datetime.now(timezone.utc),
+                },
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error incrementing password reset attempts.") from exc
+
+
+def update_user_password_by_email(
+    email: str,
+    password_hash: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates a non-deleted user's password hash by email.
+    """
+    try:
+        collection = get_users_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "email": email,
+                "isDeleted": False,
+            },
+            {
+                "$set": {
+                    "passwordHash": password_hash,
+                    "updatedAt": datetime.now(timezone.utc),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error updating user password by email.") from exc
     
 def insert_maf_rag_query_log(log_document: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -533,3 +907,77 @@ def insert_maf_rag_query_log(log_document: Dict[str, Any]) -> Dict[str, Any]:
 
     except PyMongoError as exc:
         raise RuntimeError("Error inserting MAF RAG query log into MongoDB.") from exc
+
+def insert_user_invitation(invitation_document: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inserts a user invitation document into MongoDB.
+    """
+    try:
+        collection = get_user_invitations_collection()
+
+        result = collection.insert_one(invitation_document)
+
+        inserted_document = collection.find_one({"_id": result.inserted_id})
+        if not inserted_document:
+            raise RuntimeError("User invitation was inserted but could not be retrieved.")
+
+        return serialize_mongo_document(inserted_document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error inserting user invitation into MongoDB.") from exc
+
+def get_user_invitation_by_token(
+    token: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves an active user invitation by token.
+    """
+    try:
+        collection = get_user_invitations_collection()
+
+        document = collection.find_one({
+            "token": token,
+            "usedAt": None,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error retrieving user invitation by token.") from exc
+
+
+def mark_user_invitation_used(
+    token: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Marks a user invitation as used after successful acceptance.
+    """
+    try:
+        collection = get_user_invitations_collection()
+
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "token": token,
+                "usedAt": None,
+            },
+            {
+                "$set": {
+                    "usedAt": now,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError("Error marking user invitation as used.") from exc

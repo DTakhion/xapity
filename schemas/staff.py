@@ -186,6 +186,23 @@ class StaffCreateRequest(BaseModel):
     notes: Optional[str] = None
     workingHours: Optional[WorkingHours] = None
 
+class StaffUpdateRequest(BaseModel):
+    """
+    Schema usado para actualizar parcialmente un miembro del staff.
+
+    Todos los campos son opcionales porque el endpoint PATCH debe permitir
+    modificar solo uno o algunos atributos.
+    """
+
+    name: Optional[str] = None
+    role: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    specialties: Optional[List[str]] = None
+    serviceIds: Optional[List[str]] = None
+    notes: Optional[str] = None
+    workingHours: Optional[WorkingHours] = None
+    isActive: Optional[bool] = None
 
 # Salida
 class StaffResponse(BaseModel):
