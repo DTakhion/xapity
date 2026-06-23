@@ -78,6 +78,10 @@ def build_embeddings(chunks: list[dict]) -> list[dict]:
 
         chunk_id = chunk["chunk_id"]
         text = chunk["text"]
+        
+        if not text or not text.strip():
+            print(f"Chunk vacío omitido: {chunk_id}")
+            continue
 
         print(f"[{index}/{total}] Generando embedding: {chunk_id}")
 
@@ -87,7 +91,9 @@ def build_embeddings(chunks: list[dict]) -> list[dict]:
             "chunk_id": chunk_id,
             "embedding": embedding,
             "text": text,
+            "benefit_title": chunk.get("benefit_title"),
             "metadata": {
+                **chunk.get("metadata", {}),
                 "source": chunk.get("source"),
                 "page": chunk.get("page"),
                 "section": chunk.get("section"),

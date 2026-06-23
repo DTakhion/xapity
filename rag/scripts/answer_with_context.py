@@ -34,6 +34,28 @@ MIN_SCORE = 0.68
 # Prompt RAG
 # =========================
 
+# def build_context(matches: list[dict]) -> str:
+#     """
+#     Convierte los chunks recuperados en contexto legible para el LLM.
+#     """
+#     context_blocks = []
+
+#     for index, match in enumerate(matches, start=1):
+#         metadata = match.get("metadata", {})
+
+#         block = f"""
+# [Contexto {index}]
+# Fuente: {metadata.get("source")}
+# Página: {metadata.get("page")}
+# Score: {match.get("score")}
+
+# Texto:
+# {match.get("text")}
+# """
+#         context_blocks.append(block.strip())
+
+#     return "\n\n".join(context_blocks)
+
 def build_context(matches: list[dict]) -> str:
     """
     Convierte los chunks recuperados en contexto legible para el LLM.
@@ -43,10 +65,26 @@ def build_context(matches: list[dict]) -> str:
     for index, match in enumerate(matches, start=1):
         metadata = match.get("metadata", {})
 
+        source = (
+            match.get("source")
+            or metadata.get("source")
+            or metadata.get("document_name")
+        )
+
+        page = match.get("page") or metadata.get("page")
+        section = match.get("section") or metadata.get("section")
+        benefit_title = (
+            match.get("benefit_title")
+            or metadata.get("benefit_title")
+            or "Sin título específico"
+        )
+
         block = f"""
 [Contexto {index}]
-Fuente: {metadata.get("source")}
-Página: {metadata.get("page")}
+Fuente: {source}
+Página: {page}
+Sección: {section}
+Beneficio: {benefit_title}
 Score: {match.get("score")}
 
 Texto:
@@ -67,6 +105,7 @@ Eres Xapity, un asistente corporativo especializado en responder preguntas sobre
 INSTRUCCIONES:
 - Responde únicamente usando la información entregada en el CONTEXTO.
 - No inventes información ni agregues supuestos.
+- Si el contexto indica que un beneficio es "único y anual", no lo describas como mensual. Puedes decir que se paga junto con la remuneración del mes correspondiente, pero no que es mensual.
 - Si el contexto no contiene información suficiente para responder con certeza, indica exactamente:
   "No encontré información suficiente en el manual disponible para responder con certeza."
 
@@ -150,9 +189,16 @@ def answer_with_context(query: str) -> dict:
         {
             "chunk_id": match.get("chunk_id"),
             "score": match.get("score"),
-            "source": match.get("metadata", {}).get("source"),
-            "page": match.get("metadata", {}).get("page"),
+            "semantic_score": match.get("semantic_score"),
+            "source": match.get("source")
+            or match.get("metadata", {}).get("source")
+            or match.get("metadata", {}).get("document_name"),
+            "page": match.get("page") or match.get("metadata", {}).get("page"),
+            "section": match.get("section") or match.get("metadata", {}).get("section"),
+            "benefit_title": match.get("benefit_title")
+            or match.get("metadata", {}).get("benefit_title"),
         }
+        
         for match in matches
     ]
 
@@ -206,9 +252,9 @@ def main():
         for source in result["sources"]:
             print(
                 f"- {source['source']} | Página {source['page']} | "
+                f"{source.get('section')} | {source.get('benefit_title')} | "
                 f"{source['chunk_id']} | score {source['score']}"
             )
-
 
 if __name__ == "__main__":
     main()
