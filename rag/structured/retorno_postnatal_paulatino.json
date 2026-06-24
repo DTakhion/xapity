@@ -1,0 +1,148 @@
+{
+  "benefitId": "retorno_postnatal_paulatino",
+  "category": {
+    "id": "familia_asignaciones",
+    "name": "Beneficios de Familia y Asignaciones"
+  },
+  "title": "Retorno Postnatal Paulatino",
+  "type": "permiso",
+  "nature": "corporativo",
+  "source": {
+    "document": "manual_beneficios_2025_2027.pdf",
+    "organization": "MAF Chile",
+    "validFrom": "2025-04-01",
+    "validTo": "2027-03-31"
+  },
+  "summary": "La empresa otorgará hasta una hora diaria de permiso adicional a la hora de lactancia establecida por la ley, para madres trabajadoras que se reincorporen a sus funciones luego del postnatal, por una duración de 30 días corridos.",
+  "rules": [
+    {
+      "id": "hora_adicional",
+      "description": "La empresa otorgará hasta una hora diaria de permiso adicional a la hora de lactancia establecida por la ley."
+    },
+    {
+      "id": "beneficiarias",
+      "description": "El beneficio aplica a madres trabajadoras que se reincorporen a sus funciones luego del postnatal."
+    },
+    {
+      "id": "duracion",
+      "description": "El beneficio tendrá una duración de 30 días corridos.",
+      "days": 30,
+      "dayType": "corridos"
+    },
+    {
+      "id": "sin_horas_extra",
+      "description": "No se considerará como cálculo de horas extraordinarias si la trabajadora no utiliza el beneficio."
+    },
+    {
+      "id": "horario_normal",
+      "description": "Se mantendrá el horario de trabajo normal."
+    },
+    {
+      "id": "lactancia_irrenunciable",
+      "description": "Las colaboradoras que cuenten con horario de lactancia no deberán realizar horas extraordinarias, ya que es un beneficio irrenunciable."
+    }
+  ],
+  "requirements": [
+    {
+      "type": "condition",
+      "description": "La colaboradora debe reincorporarse a sus funciones luego de su postnatal."
+    }
+  ],
+  "documents": [],
+  "restrictions": [
+    {
+      "id": "postnatal_return",
+      "description": "El beneficio se hace efectivo siempre que la persona se reincorpore a sus funciones luego de su postnatal."
+    },
+    {
+      "id": "no_overtime_calculation",
+      "description": "No se considerará como cálculo de horas extraordinarias si la trabajadora no utiliza el beneficio."
+    },
+    {
+      "id": "contract_validation",
+      "description": "El chatbot no valida elegibilidad contractual individual."
+    }
+  ],
+  "humanQuestions": [
+    "¿Existe retorno postnatal paulatino?",
+    "¿Tengo una hora adicional después del postnatal?",
+    "¿Cuánto dura el retorno postnatal paulatino?",
+    "¿Qué pasa cuando vuelvo del postnatal?",
+    "¿La empresa da permiso adicional por lactancia?",
+    "¿Puedo hacer horas extra si tengo horario de lactancia?",
+    "¿Cuántos días dura el beneficio postnatal?"
+  ],
+  "idealAnswers": [
+    {
+      "question": "¿Existe retorno postnatal paulatino?",
+      "answer": "Sí. Según el Manual de Beneficios de MAF Chile, la empresa otorga hasta una hora diaria adicional a la hora de lactancia legal para madres trabajadoras que se reincorporen luego del postnatal."
+    },
+    {
+      "question": "¿Cuánto dura el retorno postnatal paulatino?",
+      "answer": "El beneficio tiene una duración de 30 días corridos desde la reincorporación luego del postnatal."
+    }
+  ],
+  "edgeCases": [
+    {
+      "case": "Consulta sobre horas extraordinarias.",
+      "expectedBehavior": "Informar que el manual indica que no se considerará como cálculo de horas extraordinarias si la trabajadora no utiliza el beneficio."
+    },
+    {
+      "case": "Consulta sobre elegibilidad individual.",
+      "expectedBehavior": "Informar el beneficio general y derivar la validación particular a Gestión de Personas."
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "retorno_postnatal_paulatino_chunk_1",
+      "type": "summary",
+      "content": "La empresa otorgará hasta una hora diaria de permiso adicional a la hora de lactancia legal a todas las madres trabajadoras."
+    },
+    {
+      "chunkId": "retorno_postnatal_paulatino_chunk_2",
+      "type": "condition",
+      "content": "El beneficio se hará efectivo cuando la persona se reincorpore a sus funciones luego del postnatal."
+    },
+    {
+      "chunkId": "retorno_postnatal_paulatino_chunk_3",
+      "type": "duration",
+      "content": "El beneficio tendrá una duración de 30 días corridos."
+    },
+    {
+      "chunkId": "retorno_postnatal_paulatino_chunk_4",
+      "type": "restriction",
+      "content": "No se considerará como cálculo de horas extraordinarias si la trabajadora no utiliza el beneficio."
+    },
+    {
+      "chunkId": "retorno_postnatal_paulatino_chunk_5",
+      "type": "restriction",
+      "content": "Las colaboradoras con horario de lactancia no deberán realizar horas extraordinarias, ya que es un beneficio irrenunciable."
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "postnatal",
+      "lactancia",
+      "madres",
+      "retorno",
+      "hora_adicional",
+      "permiso",
+      "familia"
+    ],
+    "requiresDocumentation": false,
+    "requiresHRValidation": true,
+    "hasMonetaryAmount": false,
+    "hasDays": true,
+    "legalBenefit": false,
+    "corporateBenefit": true,
+    "personalizable": false,
+    "language": "es",
+    "country": "CL"
+  },
+  "chatbotBehavior": {
+    "allowInference": false,
+    "requiresGroundedAnswers": true,
+    "fallbackToHR": true,
+    "mustAvoidPersonalValidation": true
+  }
+}

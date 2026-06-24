@@ -1,0 +1,120 @@
+{
+  "benefitId": "permiso_padres_nacimiento_hijos",
+  "category": {
+    "id": "familia_asignaciones",
+    "name": "Beneficios de Familia y Asignaciones"
+  },
+  "title": "Permiso Padres Nacimiento Hijos",
+  "type": "permiso",
+  "nature": "corporativo",
+  "source": {
+    "document": "manual_beneficios_2025_2027.pdf",
+    "organization": "MAF Chile",
+    "validFrom": "2025-04-01",
+    "validTo": "2027-03-31"
+  },
+  "summary": "Los colaboradores hombres tendrán derecho a un permiso de 5 días hábiles adicionales a los días de permiso que otorga la ley por nacimiento de hijos.",
+  "rules": [
+    {
+      "id": "dias_adicionales",
+      "description": "La empresa otorga 5 días hábiles adicionales al permiso legal por nacimiento de hijos.",
+      "days": 5,
+      "dayType": "hábiles"
+    },
+    {
+      "id": "beneficiario",
+      "description": "El beneficio aplica a colaboradores hombres por nacimiento de hijos."
+    },
+    {
+      "id": "uso_permiso",
+      "description": "Los 5 días adicionales pueden utilizarse de forma consecutiva desde el momento del parto o distribuirse dentro del primer mes desde la fecha del nacimiento."
+    }
+  ],
+  "requirements": [],
+  "documents": [],
+  "restrictions": [
+    {
+      "id": "male_collaborators",
+      "description": "El beneficio está descrito para colaboradores hombres."
+    },
+    {
+      "id": "use_within_first_month",
+      "description": "Si no se usa de forma consecutiva desde el parto, debe distribuirse dentro del primer mes desde la fecha del nacimiento."
+    },
+    {
+      "id": "contract_validation",
+      "description": "El chatbot no valida elegibilidad contractual individual."
+    }
+  ],
+  "humanQuestions": [
+    "¿Cuántos días adicionales tengo por nacimiento de un hijo?",
+    "¿Existe permiso adicional por nacimiento de hijos?",
+    "¿El padre tiene días adicionales por nacimiento?",
+    "¿Puedo usar los días de nacimiento de forma separada?",
+    "¿Hasta cuándo puedo usar el permiso adicional por nacimiento?",
+    "¿Cuántos días hábiles da la empresa por nacimiento?",
+    "¿El permiso por nacimiento es adicional al legal?"
+  ],
+  "idealAnswers": [
+    {
+      "question": "¿Cuántos días adicionales tengo por nacimiento de un hijo?",
+      "answer": "Según el Manual de Beneficios de MAF Chile, los colaboradores hombres tienen derecho a 5 días hábiles adicionales a los días de permiso que otorga la ley por nacimiento de hijos."
+    },
+    {
+      "question": "¿Puedo usar los días de nacimiento separados?",
+      "answer": "Sí. Los 5 días adicionales pueden utilizarse de forma consecutiva desde el parto o distribuirse dentro del primer mes desde la fecha del nacimiento."
+    }
+  ],
+  "edgeCases": [
+    {
+      "case": "Consulta sobre elegibilidad individual.",
+      "expectedBehavior": "Informar el beneficio general y derivar la validación particular a Gestión de Personas."
+    },
+    {
+      "case": "Consulta si aplica a madres.",
+      "expectedBehavior": "Indicar que el manual describe este beneficio para colaboradores hombres."
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "permiso_padres_nacimiento_hijos_chunk_1",
+      "type": "summary",
+      "content": "Los colaboradores hombres tendrán derecho a un permiso de 5 días hábiles adicionales a los días de permiso que otorga la ley por nacimiento de hijos."
+    },
+    {
+      "chunkId": "permiso_padres_nacimiento_hijos_chunk_2",
+      "type": "days",
+      "content": "El beneficio contempla 5 días hábiles adicionales."
+    },
+    {
+      "chunkId": "permiso_padres_nacimiento_hijos_chunk_3",
+      "type": "usage",
+      "content": "Los días pueden utilizarse de forma consecutiva desde el parto o distribuirse dentro del primer mes desde la fecha del nacimiento."
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "nacimiento",
+      "hijo",
+      "padre",
+      "permiso",
+      "dias_habiles",
+      "familia"
+    ],
+    "requiresDocumentation": false,
+    "requiresHRValidation": true,
+    "hasMonetaryAmount": false,
+    "hasDays": true,
+    "legalBenefit": false,
+    "corporateBenefit": true,
+    "personalizable": false,
+    "language": "es",
+    "country": "CL"
+  },
+  "chatbotBehavior": {
+    "allowInference": false,
+    "requiresGroundedAnswers": true,
+    "fallbackToHR": true,
+    "mustAvoidPersonalValidation": true
+  }
+}

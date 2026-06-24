@@ -83,9 +83,18 @@ if __name__ == "__main__":
     #     "¿Tienen convenio con gimnasio?",
     # ]
     
+    # test_questions = [
+    #     "¿Qué documentos necesito para el bono de natalidad?",
+    #     "¿Cuántos días tengo por matrimonio?",
+    #     "¿Tienen convenio con gimnasio?",
+    # ]
+    
     test_questions = [
-        "¿Qué documentos necesito para el bono de natalidad?",
-        "¿Cuántos días tengo por matrimonio?",
+        "¿Cuántos días adicionales tengo por nacimiento de un hijo?",
+        "¿Existe retorno postnatal paulatino?",
+        "¿Cuánto dura el retorno postnatal paulatino?",
+        "¿La empresa paga sala cuna?",
+        "¿El padre puede acceder al beneficio de sala cuna?",
         "¿Tienen convenio con gimnasio?",
     ]
 

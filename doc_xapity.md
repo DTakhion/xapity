@@ -110,6 +110,12 @@ python rag/deterministic/matcher.py
 python rag/deterministic/responder.py
 ```
 
+# rag/deterministic/service.py
+
+``` bash
+python rag/deterministic/service.py
+```
+
 # Para build dockerfile
 ``` bash
 docker build --platform linux/amd64 -t xapity-api:local .
