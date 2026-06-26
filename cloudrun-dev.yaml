@@ -1,0 +1,40 @@
+# cloudrun-dev.yaml
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: xapity-api-dev
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/container-dependencies: '{"xapity-api":["ollama"]}'
+    spec:
+      containers:
+        - name: xapity-api
+          image: us-central1-docker.pkg.dev/fiery-strategy-497320-n9/xapity/xapity-api:dev
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://localhost:11434"
+            - name: OLLAMA_EMBEDDING_MODEL
+              value: "nomic-embed-text"
+            - name: OLLAMA_LLM_MODEL
+              value: "llama3.2:3b"
+
+        - name: ollama
+          image: us-central1-docker.pkg.dev/fiery-strategy-497320-n9/xapity/xapity-ollama:dev
+          resources:
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
