@@ -11,6 +11,7 @@ env:
   REPOSITORY: xapity
   SERVICE: xapity-api-dev
   IMAGE: xapity-api
+  OLLAMA_IMAGE: xapity-ollama
 
 jobs:
   deploy:
@@ -36,7 +37,7 @@ jobs:
       - name: Configure Docker auth
         run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
 
-      - name: Build Docker image
+      - name: Build API Docker image
         run: |
           docker build \
             --platform linux/amd64 \
@@ -44,15 +45,38 @@ jobs:
             -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:dev \
             .
 
-      - name: Push Docker image
+      - name: Push API Docker image
         run: |
           docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }}
           docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:dev
 
+      - name: Build Ollama Docker image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            -f Dockerfile.ollama \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }} \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:dev \
+            .
+
+      - name: Push Ollama Docker image
+        run: |
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }}
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:dev
+
       - name: Deploy to Cloud Run DEV
         run: |
           gcloud run deploy $SERVICE \
-            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }} \
             --region $REGION \
             --platform managed \
-            --no-invoker-iam-check
+            --no-invoker-iam-check \
+            --memory 4Gi \
+            --cpu 2 \
+            --timeout 300 \
+            --container xapity-api \
+            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }} \
+            --port 8080 \
+            --set-env-vars OLLAMA_BASE_URL=http://localhost:11434,OLLAMA_EMBEDDING_MODEL=nomic-embed-text,OLLAMA_LLM_MODEL=llama3.2:3b \
+            --container ollama \
+            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }} \
+            --set-env-vars OLLAMA_HOST=0.0.0.0:11434

@@ -91,7 +91,25 @@ def answer_hybrid_question(
             "metadata": deterministic_result.get("metadata", {}),
         }
 
-    rag_result = answer_user_question(query)
+    try:
+        rag_result = answer_user_question(query)
+    except Exception as exc:
+        fallback = build_fallback_response(query)
+        fallback["status"] = "rag_error"
+        fallback["mode"] = "fallback"
+        fallback["deterministic_attempt"] = {
+            "matched": deterministic_result.get("matched"),
+            "confidence": deterministic_result.get("confidence"),
+            "benefitId": deterministic_result.get("benefitId"),
+            "title": deterministic_result.get("title"),
+            "reason": deterministic_result.get("reason"),
+        }
+        fallback["rag_attempt"] = {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        return fallback
 
     if (
         rag_result.get("status") == "answered"
