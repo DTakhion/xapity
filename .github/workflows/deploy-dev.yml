@@ -64,6 +64,11 @@ jobs:
           docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }}
           docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:dev
 
+      - name: Render Cloud Run manifest
+        run: |
+          sed -i "s|us-central1-docker.pkg.dev/fiery-strategy-497320-n9/xapity/xapity-api:dev|$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }}|g" cloudrun-dev.yaml
+          sed -i "s|us-central1-docker.pkg.dev/fiery-strategy-497320-n9/xapity/xapity-ollama:dev|$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }}|g" cloudrun-dev.yaml
+
       - name: Deploy to Cloud Run DEV
         run: |
           gcloud run services replace cloudrun-dev.yaml \
