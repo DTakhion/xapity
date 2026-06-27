@@ -73,3 +73,11 @@ jobs:
         run: |
           gcloud run services replace cloudrun-dev.yaml \
             --region $REGION
+
+      - name: Allow unauthenticated invocations
+        run: |
+          gcloud run services add-iam-policy-binding $SERVICE \
+            --region $REGION \
+            --member="allUsers" \
+            --role="roles/run.invoker" \
+            --quiet
