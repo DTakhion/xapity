@@ -42,8 +42,8 @@ LLM_MODEL_NAME = os.getenv(
     "llama3.2:3b"
 )
 
-DEFAULT_TOP_K = 2
-DEFAULT_MIN_SCORE = 0.68
+DEFAULT_TOP_K = 5
+DEFAULT_MIN_SCORE = 0.45
 
 
 # =========================
