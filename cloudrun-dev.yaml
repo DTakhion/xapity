@@ -27,13 +27,10 @@ spec:
               cpu: "1"
               memory: "1Gi"
           env:
-            - name: PORT
-              value: "8080"
-
             - name: QICORE_BASE_URL
               value: "https://qicore-api-841451822292.us-central1.run.app"
             - name: QICORE_API_KEY
-              value: "REEMPLAZAR_SI_CORRESPONDE"
+              value: qk_live_wlhACg7ldRpPluTkUfYgNniXdvwtIdMG6DraxzVF1xg
 
             - name: MONGO_DB
               value: "xapity_dev"
@@ -47,7 +44,7 @@ spec:
             - name: LUCA_USERNAME
               value: "daniel@tryluca.cl"
             - name: LUCA_PASSWORD
-              value: "REEMPLAZAR_SI_CORRESPONDE"
+              value: Vamos1234
             - name: LUCA_API_BASE_URL
               value: "https://luca-api-dev-bvxil9xk.ue.gateway.dev"
             - name: LUCA_BUSINESS_ID
