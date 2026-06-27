@@ -10,4 +10,4 @@ RUN ollama serve > /tmp/ollama.log 2>&1 & \
 
 EXPOSE 11434
 
-CMD ["ollama", "serve"]
+CMD ["serve"]
