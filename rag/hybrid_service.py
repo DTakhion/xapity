@@ -10,18 +10,23 @@ from rag.service import answer_user_question
 DETERMINISTIC_THRESHOLD = 0.70
 RAG_CONFIDENCE_ACCEPTED = {"high", "medium"}
 
-def map_numeric_confidence(score: float) -> str:
+def map_numeric_confidence(score: float | int | None) -> str:
     """
-    Convierte confianza numérica determinística al formato esperado
-    por RagAnswerResponse: high | medium | low | none.
+    Convierte confianza numérica determinística al formato
+    high | medium | low | none.
     """
-    if score >= 0.85:
+    try:
+        numeric_score = float(score or 0.0)
+    except (TypeError, ValueError):
+        return "none"
+
+    if numeric_score >= 0.85:
         return "high"
 
-    if score >= 0.70:
+    if numeric_score >= 0.70:
         return "medium"
 
-    if score > 0:
+    if numeric_score > 0:
         return "low"
 
     return "none"
@@ -32,8 +37,8 @@ def build_fallback_response(query: str) -> dict[str, Any]:
         "status": "no_context",
         "mode": "fallback",
         "answer": (
-            "No encontré información suficiente en el manual disponible para responder con certeza. "
-            "Te recomiendo consultar con Gestión de Personas para validar este caso."
+            "No encontré información suficiente en el manual disponible "
+            "para responder con certeza."
         ),
         "query": query,
         "confidence": "none",
@@ -74,29 +79,37 @@ def answer_hybrid_question(
     )
 
     if deterministic_result.get("matched") is True:
+        deterministic_source = deterministic_result.get("source")
+
         return {
             "status": "answered",
             "mode": "deterministic",
             "answer": deterministic_result.get("answer"),
             "query": query,
             "confidence": map_numeric_confidence(
-                deterministic_result.get("confidence", 0.0)
+                deterministic_result.get("confidence")
             ),
-            #"confidence": deterministic_result.get("confidence"),
             "benefitId": deterministic_result.get("benefitId"),
             "title": deterministic_result.get("title"),
             "category": deterministic_result.get("category"),
-            "sources": [deterministic_result.get("source")],
+            "sources": (
+                [deterministic_source]
+                if deterministic_source
+                else []
+            ),
             "matches_count": 1,
             "metadata": deterministic_result.get("metadata", {}),
         }
 
     try:
         rag_result = answer_user_question(query)
+
     except Exception as exc:
         fallback = build_fallback_response(query)
+
         fallback["status"] = "rag_error"
         fallback["mode"] = "fallback"
+
         fallback["deterministic_attempt"] = {
             "matched": deterministic_result.get("matched"),
             "confidence": deterministic_result.get("confidence"),
@@ -104,17 +117,16 @@ def answer_hybrid_question(
             "title": deterministic_result.get("title"),
             "reason": deterministic_result.get("reason"),
         }
+
         fallback["rag_attempt"] = {
             "status": "error",
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+
         return fallback
 
-    if (
-        rag_result.get("status") == "answered"
-        and rag_result.get("confidence") in RAG_CONFIDENCE_ACCEPTED
-    ):
+    if rag_result.get("status") == "answered":
         return {
             "status": "answered",
             "mode": "rag",
@@ -133,6 +145,7 @@ def answer_hybrid_question(
         }
 
     fallback = build_fallback_response(query)
+
     fallback["deterministic_attempt"] = {
         "matched": deterministic_result.get("matched"),
         "confidence": deterministic_result.get("confidence"),
@@ -140,11 +153,13 @@ def answer_hybrid_question(
         "title": deterministic_result.get("title"),
         "reason": deterministic_result.get("reason"),
     }
+
     fallback["rag_attempt"] = {
         "status": rag_result.get("status"),
         "confidence": rag_result.get("confidence"),
         "matches_count": rag_result.get("matches_count"),
         "sources": rag_result.get("sources", []),
+        "error_detail": rag_result.get("error_detail"),
     }
 
     return fallback
