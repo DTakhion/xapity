@@ -257,16 +257,6 @@ De esta forma, la evolución funcional de la plataforma puede realizarse de mane
 
 ---
 
-## 6.1. Evolución y Cumplimiento
-
-Xapity mantiene una estrategia de mejora continua en materias de arquitectura, seguridad, gobierno de datos e inteligencia artificial.
-
-Como parte de esta evolución, la plataforma contempla la evaluación progresiva de estándares y marcos reconocidos internacionalmente en ámbitos de seguridad y cumplimiento, incluyendo referencias tales como ISO 27001, SOC 2 y otras prácticas de gobierno corporativo aplicables a soluciones empresariales.
-
-La adopción de dichos marcos dependerá de los requerimientos regulatorios, contractuales y operacionales de la plataforma y de las organizaciones que la utilicen.
-
----
-
 # 7. Autenticación y Control de Acceso
 
 La plataforma incorpora mecanismos de autenticación y autorización orientados a garantizar que únicamente usuarios autorizados puedan acceder a los recursos disponibles dentro de su contexto organizacional.

@@ -5,12 +5,27 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from rag.deterministic.loader import (
-    DEFAULT_STRUCTURED_DIR,
-    load_structured_benefits,
-)
-from rag.deterministic.matcher import match_benefit
-from rag.deterministic.responder import build_deterministic_answer
+# from rag.deterministic.loader import (
+#     DEFAULT_STRUCTURED_DIR,
+#     load_structured_benefits,
+# )
+# from rag.deterministic.matcher import match_benefit
+# from rag.deterministic.responder import build_deterministic_answer
+
+try:
+    from rag.deterministic.loader import (
+        DEFAULT_STRUCTURED_DIR,
+        load_structured_benefits,
+    )
+    from rag.deterministic.matcher import match_benefit
+    from rag.deterministic.responder import build_deterministic_answer
+except ModuleNotFoundError:
+    from loader import (
+        DEFAULT_STRUCTURED_DIR,
+        load_structured_benefits,
+    )
+    from matcher import match_benefit
+    from responder import build_deterministic_answer
 
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.70
@@ -60,11 +75,26 @@ def answer_deterministic_question(
 
 
 if __name__ == "__main__":
+    # test_questions = [
+    #     "¿Cuánto pagan por natalidad?",
+    #     "¿Qué documentos necesito para el bono de natalidad?",
+    #     "¿Qué pasa si ambos padres trabajan en MAF?",
+    #     "¿Cuántos días tengo por matrimonio?",
+    #     "¿Tienen convenio con gimnasio?",
+    # ]
+    
+    # test_questions = [
+    #     "¿Qué documentos necesito para el bono de natalidad?",
+    #     "¿Cuántos días tengo por matrimonio?",
+    #     "¿Tienen convenio con gimnasio?",
+    # ]
+    
     test_questions = [
-        "¿Cuánto pagan por natalidad?",
-        "¿Qué documentos necesito para el bono de natalidad?",
-        "¿Qué pasa si ambos padres trabajan en MAF?",
-        "¿Cuántos días tengo por matrimonio?",
+        "¿Cuántos días adicionales tengo por nacimiento de un hijo?",
+        "¿Existe retorno postnatal paulatino?",
+        "¿Cuánto dura el retorno postnatal paulatino?",
+        "¿La empresa paga sala cuna?",
+        "¿El padre puede acceder al beneficio de sala cuna?",
         "¿Tienen convenio con gimnasio?",
     ]
 

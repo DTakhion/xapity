@@ -71,29 +71,49 @@ LLM responde
    ↓
 Validación mínima de respuesta
 
-# ejecución rag/scripts/build_chunks.py
+# Xapity-maf
+
+# rag/scripts/build_chunks.py
 
 ``` bash
 python rag/scripts/build_chunks.py
 ```
 
-# ejecución rag/scripts/build_embeddings.py
+# rag/scripts/build_embeddings.py
 
 ``` bash
 python rag/scripts/build_embeddings.py
 ```
 
-# ejecucion rag/scripts/retrieve_context.py
+# rag/scripts/retrieve_context.py
 ## Se debe tener arriba ollama 'ollama serve' y luego 'ollama pull nomic-embed-text'/'ollama pull llama3.2:3b' (terminales independientes)
 
 ``` bash
 python rag/scripts/retrieve_context.py "¿Qué beneficios tiene el trabajador?"
 ```
 
-# ejecucion rag/scripts/answer_with_context.py
+# rag/scripts/answer_with_context.py
 ## Se debe tener arriba ollama 'ollama serve' y luego 'ollama pull llama3.2:3b' (terminales independientes)
 ``` bash
 python rag/scripts/answer_with_context.py "¿Qué permiso tiene un padre por nacimiento de un hijo?"
+```
+
+# rag/deterministic/matcher.py
+
+``` bash
+python rag/deterministic/matcher.py
+```
+
+# rag/deterministic/responder.py
+
+``` bash
+python rag/deterministic/responder.py
+```
+
+# rag/deterministic/service.py
+
+``` bash
+python rag/deterministic/service.py
 ```
 
 # Para build dockerfile

@@ -1,0 +1,152 @@
+{
+  "benefitId": "obligacion_legal_otorgamiento_sala_cuna",
+  "category": {
+    "id": "familia_asignaciones",
+    "name": "Beneficios de Familia y Asignaciones"
+  },
+  "title": "Obligación Legal de Otorgamiento Sala Cuna",
+  "type": "asignacion",
+  "nature": "legal",
+  "source": {
+    "document": "manual_beneficios_2025_2027.pdf",
+    "organization": "MAF Chile",
+    "validFrom": "2025-04-01",
+    "validTo": "2027-03-31"
+  },
+  "summary": "Esta asignación contempla el pago de la matrícula y mensualidad de una sala cuna en convenio vigente para madres que tengan hijos de hasta 2 años. También se extiende al padre viudo y al padre que tenga la tuición legal de sus hijos menores de 2 años.",
+  "rules": [
+    {
+      "id": "cobertura",
+      "description": "La asignación contempla el pago de la matrícula y mensualidad de una sala cuna en convenio vigente."
+    },
+    {
+      "id": "beneficiarias",
+      "description": "El beneficio se otorgará a todas las madres que tengan hijos de hasta 2 años."
+    },
+    {
+      "id": "extension_padre_viudo",
+      "description": "El beneficio se hace extensivo al padre viudo."
+    },
+    {
+      "id": "extension_tuicion_legal",
+      "description": "El beneficio se hace extensivo al padre que tenga la tuición legal de sus hijos menores de 2 años."
+    },
+    {
+      "id": "edad_hijo",
+      "description": "El beneficio aplica respecto de hijos menores o de hasta 2 años, según corresponda."
+    }
+  ],
+  "requirements": [
+    {
+      "type": "condition",
+      "description": "Tener hijo de hasta 2 años para el caso de madres trabajadoras."
+    },
+    {
+      "type": "condition",
+      "description": "Ser padre viudo o tener la tuición legal de hijos menores de 2 años, según corresponda."
+    },
+    {
+      "type": "provider",
+      "description": "La sala cuna debe estar en convenio vigente."
+    }
+  ],
+  "documents": [],
+  "restrictions": [
+    {
+      "id": "nursery_agreement",
+      "description": "El pago corresponde a sala cuna en convenio vigente."
+    },
+    {
+      "id": "child_age",
+      "description": "El beneficio aplica para hijos de hasta 2 años en el caso de madres, y para hijos menores de 2 años en los casos extendidos al padre viudo o con tuición legal."
+    },
+    {
+      "id": "contract_validation",
+      "description": "El chatbot no valida elegibilidad contractual individual."
+    }
+  ],
+  "humanQuestions": [
+    "¿Existe beneficio de sala cuna?",
+    "¿La empresa paga sala cuna?",
+    "¿Qué cubre la sala cuna?",
+    "¿Hasta qué edad cubre sala cuna?",
+    "¿La sala cuna cubre matrícula y mensualidad?",
+    "¿El padre puede acceder a sala cuna?",
+    "¿Aplica sala cuna para padre viudo?",
+    "¿Aplica sala cuna si tengo tuición legal?",
+    "¿La sala cuna debe estar en convenio?"
+  ],
+  "idealAnswers": [
+    {
+      "question": "¿La empresa paga sala cuna?",
+      "answer": "Según el Manual de Beneficios de MAF Chile, el beneficio contempla el pago de la matrícula y mensualidad de una sala cuna en convenio vigente para madres con hijos de hasta 2 años."
+    },
+    {
+      "question": "¿El padre puede acceder al beneficio de sala cuna?",
+      "answer": "El manual indica que el beneficio se hace extensivo al padre viudo y al padre que tenga la tuición legal de sus hijos menores de 2 años."
+    }
+  ],
+  "edgeCases": [
+    {
+      "case": "Consulta de padre no viudo ni con tuición legal.",
+      "expectedBehavior": "Indicar sólo lo que señala el manual: se extiende al padre viudo y al padre con tuición legal de hijos menores de 2 años."
+    },
+    {
+      "case": "Consulta por sala cuna fuera de convenio.",
+      "expectedBehavior": "Indicar que el manual menciona sala cuna en convenio vigente."
+    },
+    {
+      "case": "Consulta sobre elegibilidad individual.",
+      "expectedBehavior": "Informar el beneficio general y derivar la validación particular a Gestión de Personas."
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "obligacion_legal_otorgamiento_sala_cuna_chunk_1",
+      "type": "summary",
+      "content": "La asignación contempla el pago de la matrícula y mensualidad de una sala cuna en convenio vigente."
+    },
+    {
+      "chunkId": "obligacion_legal_otorgamiento_sala_cuna_chunk_2",
+      "type": "beneficiaries",
+      "content": "El beneficio se otorgará a todas las madres que tengan hijos de hasta 2 años."
+    },
+    {
+      "chunkId": "obligacion_legal_otorgamiento_sala_cuna_chunk_3",
+      "type": "extension",
+      "content": "El beneficio se hace extensivo al padre viudo."
+    },
+    {
+      "chunkId": "obligacion_legal_otorgamiento_sala_cuna_chunk_4",
+      "type": "extension",
+      "content": "El beneficio se hace extensivo al padre que tenga la tuición legal de sus hijos menores de 2 años."
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "sala_cuna",
+      "matricula",
+      "mensualidad",
+      "madres",
+      "hijos",
+      "padre_viudo",
+      "tuicion_legal",
+      "familia"
+    ],
+    "requiresDocumentation": false,
+    "requiresHRValidation": true,
+    "hasMonetaryAmount": false,
+    "hasDays": false,
+    "legalBenefit": true,
+    "corporateBenefit": false,
+    "personalizable": false,
+    "language": "es",
+    "country": "CL"
+  },
+  "chatbotBehavior": {
+    "allowInference": false,
+    "requiresGroundedAnswers": true,
+    "fallbackToHR": true,
+    "mustAvoidPersonalValidation": true
+  }
+}

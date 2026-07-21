@@ -44,3 +44,4 @@ env.cloudrun.yaml
 
 # Google Cloud
 *.json
+!rag/structured/*.json
