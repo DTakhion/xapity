@@ -11,6 +11,7 @@ env:
   REPOSITORY: xapity
   SERVICE: xapity-api-prod
   IMAGE: xapity-api
+  OLLAMA_IMAGE: xapity-ollama
 
 jobs:
   deploy:
@@ -34,9 +35,10 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker auth
-        run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+        run: |
+          gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
 
-      - name: Build Docker image
+      - name: Build API Docker image
         run: |
           docker build \
             --platform linux/amd64 \
@@ -44,15 +46,39 @@ jobs:
             -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:prod \
             .
 
-      - name: Push Docker image
+      - name: Push API Docker image
         run: |
           docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }}
           docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:prod
 
+      - name: Build Ollama Docker image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            -f Dockerfile.ollama \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }} \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:prod \
+            .
+
+      - name: Push Ollama Docker image
+        run: |
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }}
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:prod
+
+      - name: Render Cloud Run manifest
+        run: |
+          sed -i "s|us-central1-docker.pkg.dev/fiery-strategy-497320-n9/xapity/xapity-api:prod|$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }}|g" cloudrun-prod.yaml
+          sed -i "s|us-central1-docker.pkg.dev/fiery-strategy-497320-n9/xapity/xapity-ollama:prod|$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$OLLAMA_IMAGE:${{ github.sha }}|g" cloudrun-prod.yaml
+
       - name: Deploy to Cloud Run PROD
         run: |
-          gcloud run deploy $SERVICE \
-            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }} \
+          gcloud run services replace cloudrun-prod.yaml \
+            --region $REGION
+
+      - name: Allow unauthenticated invocations
+        run: |
+          gcloud run services add-iam-policy-binding $SERVICE \
             --region $REGION \
-            --platform managed \
-            --no-invoker-iam-check
+            --member="allUsers" \
+            --role="roles/run.invoker" \
+            --quiet
