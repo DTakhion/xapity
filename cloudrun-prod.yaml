@@ -16,7 +16,7 @@ spec:
         run.googleapis.com/container-dependencies: '{"xapity-api":["ollama"]}'
 
     spec:
-      containerConcurrency: 80
+      containerConcurrency: 1
       timeoutSeconds: 300
       serviceAccountName: 179536772092-compute@developer.gserviceaccount.com
 
