@@ -13,7 +13,7 @@ spec:
         run.googleapis.com/startup-cpu-boost: "true"
         run.googleapis.com/container-dependencies: '{"xapity-api":["ollama"]}'
     spec:
-      containerConcurrency: 80
+      containerConcurrency: 1
       timeoutSeconds: 300
       serviceAccountName: 179536772092-compute@developer.gserviceaccount.com
       containers:
@@ -132,7 +132,7 @@ spec:
           resources:
             limits:
               cpu: "2"
-              memory: "4Gi"
+              memory: "8Gi"
           env:
             - name: OLLAMA_HOST
               value: "0.0.0.0:11434"

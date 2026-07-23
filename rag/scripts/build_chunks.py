@@ -1,134 +1,3 @@
-# # rag/scripts/build_chunks.py
-# from pathlib import Path
-# import json
-# import re
-# import fitz  # PyMuPDF
-
-
-# # =========================
-# # Configuración
-# # =========================
-
-# BASE_DIR = Path(__file__).resolve().parents[1]
-
-# PDF_PATH = BASE_DIR / "raw" / "manual_beneficios_2025_2027.pdf"
-# OUTPUT_PATH = BASE_DIR / "chunks" / "manual_beneficios_2025_2027_chunks.json"
-
-# CHUNK_SIZE = 900
-# CHUNK_OVERLAP = 150
-
-
-# # =========================
-# # Utilidades
-# # =========================
-
-# def clean_text(text: str) -> str:
-#     """
-#     Limpia texto extraído desde PDF.
-#     """
-#     text = text.replace("\n", " ")
-#     text = re.sub(r"\s+", " ", text)
-#     return text.strip()
-
-
-# def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-#     """
-#     Divide texto en chunks con solapamiento.
-#     """
-#     chunks = []
-
-#     if not text:
-#         return chunks
-
-#     start = 0
-#     text_length = len(text)
-
-#     while start < text_length:
-#         end = start + chunk_size
-#         chunk = text[start:end].strip()
-
-#         if chunk:
-#             chunks.append(chunk)
-
-#         start = end - overlap
-
-#         if start < 0:
-#             start = 0
-
-#         if start >= text_length:
-#             break
-
-#     return chunks
-
-
-# def extract_pdf_chunks() -> list[dict]:
-#     """
-#     Extrae texto del PDF y genera chunks por página.
-#     """
-#     if not PDF_PATH.exists():
-#         raise FileNotFoundError(f"No se encontró el PDF en: {PDF_PATH}")
-
-#     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-#     doc = fitz.open(PDF_PATH)
-#     all_chunks = []
-
-#     chunk_counter = 1
-
-#     for page_index, page in enumerate(doc, start=1):
-#         raw_text = page.get_text("text")
-#         cleaned_text = clean_text(raw_text)
-
-#         page_chunks = split_text(
-#             cleaned_text,
-#             chunk_size=CHUNK_SIZE,
-#             overlap=CHUNK_OVERLAP,
-#         )
-
-#         for chunk_text in page_chunks:
-#             chunk = {
-#                 "chunk_id": f"maf_{chunk_counter:04d}",
-#                 "source": PDF_PATH.name,
-#                 "page": page_index,
-#                 "section": "General",
-#                 "text": chunk_text,
-#                 "metadata": {
-#                     "source_type": "pdf",
-#                     "document_name": PDF_PATH.name,
-#                     "page": page_index,
-#                     "chunk_size": CHUNK_SIZE,
-#                     "chunk_overlap": CHUNK_OVERLAP,
-#                 },
-#             }
-
-#             all_chunks.append(chunk)
-#             chunk_counter += 1
-
-#     doc.close()
-#     return all_chunks
-
-
-# def save_chunks(chunks: list[dict]) -> None:
-#     """
-#     Guarda los chunks en JSON.
-#     """
-#     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-#         json.dump(chunks, f, ensure_ascii=False, indent=2)
-
-
-# def main():
-#     chunks = extract_pdf_chunks()
-#     save_chunks(chunks)
-
-#     print("Chunks generados correctamente")
-#     print(f"PDF origen: {PDF_PATH}")
-#     print(f"Total chunks: {len(chunks)}")
-#     print(f"Archivo salida: {OUTPUT_PATH}")
-
-
-# if __name__ == "__main__":
-#     main()
-
 # rag/scripts/build_chunks.py
 from pathlib import Path
 import json
@@ -148,6 +17,12 @@ OUTPUT_PATH = BASE_DIR / "chunks" / "manual_beneficios_2025_2027_chunks.json"
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 120
 MIN_TEXT_LENGTH = 80
+
+EXCLUDED_PAGES = {
+    1,   # Portada
+    3,   # Índice
+    16,  # Control documental y aprobaciones
+}
 
 DOCUMENT_METADATA = {
     "manual_name": "Manual de Beneficios Colaboradores de MAF Chile",
@@ -217,18 +92,69 @@ BENEFIT_TITLES = [
 # Utilidades
 # =========================
 
+def extract_page_text(page: fitz.Page) -> str:
+    """
+    Extrae los bloques de texto de una página y los ordena
+    según su posición vertical y horizontal.
+    """
+    blocks = page.get_text("blocks")
+
+    ordered_blocks = sorted(
+        blocks,
+        key=lambda block: (
+            round(block[1], 1),  # coordenada superior Y
+            round(block[0], 1),  # coordenada izquierda X
+        ),
+    )
+
+    block_texts = []
+
+    for block in ordered_blocks:
+        text = block[4].strip()
+
+        if text:
+            block_texts.append(text)
+
+    return "\n".join(block_texts)
+
 def clean_text(text: str) -> str:
     """
-    Limpia texto extraído desde PDF.
+    Limpia el texto extraído conservando estructura básica.
+
+    - Normaliza saltos de línea.
+    - Une palabras cortadas por guion entre líneas.
+    - Normaliza espacios.
+    - Evita múltiples líneas vacías consecutivas.
     """
-    text = text.replace("\n", " ")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    if not text:
+        return ""
+
+    text = text.replace("\r\n", "\n")
+    text = text.replace("\r", "\n")
+
+    # Une palabras cortadas por salto de línea:
+    # "escola-\nridad" -> "escolaridad"
+    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+
+    cleaned_lines = []
+    previous_empty = False
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
+        is_empty = not line
+
+        if is_empty and previous_empty:
+            continue
+
+        cleaned_lines.append(line)
+        previous_empty = is_empty
+
+    return "\n".join(cleaned_lines).strip()
 
 
 def normalize_title(text: str) -> str:
     """
-    Normaliza pequeñas variantes/typos del manual.
+    Normaliza variantes, errores tipográficos y espacios del título.
     """
     replacements = {
         "Indeminización": "Indemnización",
@@ -236,10 +162,33 @@ def normalize_title(text: str) -> str:
         "Antiguedad": "Antigüedad",
     }
 
+    text = re.sub(r"\s+", " ", text).strip()
+
     for old, new in replacements.items():
         text = text.replace(old, new)
 
     return text
+
+def canonicalize_benefit_title(text: str) -> str:
+    """
+    Retorna la versión canónica del título definida en BENEFIT_TITLES.
+    """
+    normalized_text = normalize_title(text).casefold()
+
+    canonical_titles = {}
+
+    for title in BENEFIT_TITLES:
+        normalized_title = normalize_title(title)
+
+        canonical_titles.setdefault(
+            normalized_title.casefold(),
+            normalized_title,
+        )
+
+    return canonical_titles.get(
+        normalized_text,
+        normalize_title(text),
+    )
 
 
 def get_section_for_page(page_number: int) -> str:
@@ -256,9 +205,24 @@ def split_by_benefit_titles(text: str) -> list[dict]:
     if not text:
         return []
 
-    title_pattern = "|".join(re.escape(title) for title in BENEFIT_TITLES)
-
-    matches = list(re.finditer(title_pattern, text, flags=re.IGNORECASE))
+    sorted_titles = sorted(
+        BENEFIT_TITLES,
+        key=len,
+        reverse=True,
+    )
+    
+    title_pattern = "|".join(
+        re.escape(title)
+        for title in sorted_titles
+    )
+    
+    matches = list(
+        re.finditer(
+            rf"(?<!\w)(?:{title_pattern})(?!\w)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
 
     if not matches:
         return [
@@ -285,7 +249,9 @@ def split_by_benefit_titles(text: str) -> list[dict]:
         start = match.start()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
 
-        benefit_title = normalize_title(match.group(0)).strip()
+        benefit_title = canonicalize_benefit_title(
+            match.group(0)
+        )
         block_text = text[start:end].strip()
 
         if len(block_text) >= MIN_TEXT_LENGTH:
@@ -340,20 +306,37 @@ def split_long_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         if end >= text_length:
             break
 
-        start = max(0, end - overlap)
-
+        next_start = max(0, end - overlap)
+        
+        if next_start > 0:
+            boundary_positions = [
+                position
+                for position in (
+                    text.find(" ", next_start),
+                    text.find("\n", next_start),
+                )
+                if position != -1
+            ]
+            
+            if boundary_positions:
+                next_start = min(boundary_positions) + 1
+                
+        start = next_start
+    
     return chunks
 
 
 def is_page_relevant(page_number: int, text: str) -> bool:
     """
-    Filtra páginas vacías o casi sin contenido útil.
-    Mantiene portada, índice y control documental si tienen texto suficiente.
+    Filtra páginas sin contenido útil o que no deben indexarse.
     """
+    if page_number in EXCLUDED_PAGES:
+        return False
+
     if not text:
         return False
 
-    if len(text) < MIN_TEXT_LENGTH:
+    if len(text.strip()) < MIN_TEXT_LENGTH:
         return False
 
     return True
@@ -364,63 +347,181 @@ def extract_pdf_chunks() -> list[dict]:
     Extrae texto del PDF y genera chunks semánticos por página/beneficio.
     """
     if not PDF_PATH.exists():
-        raise FileNotFoundError(f"No se encontró el PDF en: {PDF_PATH}")
+        raise FileNotFoundError(
+            f"No se encontró el PDF en: {PDF_PATH}"
+        )
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    doc = fitz.open(PDF_PATH)
     all_chunks = []
-
     chunk_counter = 1
 
-    for page_index, page in enumerate(doc, start=1):
-        raw_text = page.get_text("text")
-        cleaned_text = clean_text(raw_text)
+    with fitz.open(PDF_PATH) as doc:
+        for page_index, page in enumerate(doc, start=1):
+            raw_text = extract_page_text(page)
+            cleaned_text = clean_text(raw_text)
 
-        if not is_page_relevant(page_index, cleaned_text):
-            print(f"[skip] Página {page_index}: sin texto relevante")
-            continue
+            if not is_page_relevant(page_index, cleaned_text):
+                print(
+                    f"[skip] Página {page_index}: "
+                    "sin texto relevante"
+                )
+                continue
 
-        section = get_section_for_page(page_index)
+            section = get_section_for_page(page_index)
 
-        semantic_blocks = split_by_benefit_titles(cleaned_text)
-
-        for block in semantic_blocks:
-            benefit_title = block["benefit_title"]
-            block_text = block["text"]
-
-            page_chunks = split_long_text(
-                block_text,
-                chunk_size=CHUNK_SIZE,
-                overlap=CHUNK_OVERLAP,
+            semantic_blocks = split_by_benefit_titles(
+                cleaned_text
             )
 
-            for local_index, chunk_text in enumerate(page_chunks, start=1):
-                chunk = {
-                    "chunk_id": f"maf_{chunk_counter:04d}",
-                    "source": PDF_PATH.name,
-                    "page": page_index,
-                    "section": section,
-                    "benefit_title": benefit_title,
-                    "text": chunk_text,
-                    "metadata": {
-                        **DOCUMENT_METADATA,
-                        "document_name": PDF_PATH.name,
+            for block in semantic_blocks:
+                benefit_title = block["benefit_title"]
+                block_text = block["text"]
+
+                page_chunks = split_long_text(
+                    block_text,
+                    chunk_size=CHUNK_SIZE,
+                    overlap=CHUNK_OVERLAP,
+                )
+
+                for local_index, chunk_text in enumerate(
+                    page_chunks,
+                    start=1,
+                ):
+                    final_chunk_text = chunk_text.strip()
+
+                    if benefit_title:
+                        normalized_chunk_start = normalize_title(
+                            final_chunk_text[
+                                : len(benefit_title) + 20
+                            ]
+                        ).casefold()
+
+                        normalized_benefit_title = (
+                            normalize_title(
+                                benefit_title
+                            ).casefold()
+                        )
+
+                        if not normalized_chunk_start.startswith(
+                            normalized_benefit_title
+                        ):
+                            final_chunk_text = (
+                                f"{benefit_title}\n"
+                                f"{final_chunk_text}"
+                            )
+
+                    embedding_text_parts = [
+                        (
+                            "Documento: "
+                            f"{DOCUMENT_METADATA['manual_name']}"
+                        ),
+                        f"Sección: {section}",
+                    ]
+
+                    if benefit_title:
+                        embedding_text_parts.append(
+                            f"Beneficio: {benefit_title}"
+                        )
+
+                    embedding_text_parts.append(
+                        final_chunk_text
+                    )
+
+                    embedding_text = "\n".join(
+                        embedding_text_parts
+                    )
+
+                    chunk = {
+                        "chunk_id": (
+                            f"maf_{chunk_counter:04d}"
+                        ),
+                        "source": PDF_PATH.name,
                         "page": page_index,
                         "section": section,
                         "benefit_title": benefit_title,
-                        "chunk_size": CHUNK_SIZE,
-                        "chunk_overlap": CHUNK_OVERLAP,
-                        "local_chunk_index": local_index,
-                    },
-                }
+                        "text": final_chunk_text,
+                        "embedding_text": embedding_text,
+                        "metadata": {
+                            **DOCUMENT_METADATA,
+                            "document_name": PDF_PATH.name,
+                            "page": page_index,
+                            "section": section,
+                            "benefit_title": benefit_title,
+                            "chunk_size": CHUNK_SIZE,
+                            "chunk_overlap": CHUNK_OVERLAP,
+                            "local_chunk_index": (
+                                local_index
+                            ),
+                        },
+                    }
 
-                all_chunks.append(chunk)
-                chunk_counter += 1
+                    all_chunks.append(chunk)
+                    chunk_counter += 1
 
-    doc.close()
     return all_chunks
 
+def print_diagnostics(chunks: list[dict]) -> None:
+    """
+    Imprime controles básicos de calidad sobre los chunks generados.
+    """
+    titled_chunks = [
+        chunk
+        for chunk in chunks
+        if chunk.get("benefit_title")
+    ]
+
+    untitled_chunks = [
+        chunk
+        for chunk in chunks
+        if not chunk.get("benefit_title")
+    ]
+
+    detected_titles = sorted(
+        {
+            chunk["benefit_title"]
+            for chunk in titled_chunks
+        }
+    )
+
+    escolaridad_chunks = [
+        chunk
+        for chunk in chunks
+        if (
+            "escolaridad"
+            in chunk.get("text", "").casefold()
+            or "escolaridad"
+            in (chunk.get("benefit_title") or "").casefold()
+        )
+    ]
+
+    print("\n=== DIAGNÓSTICO DE CHUNKS ===")
+    print(f"Total chunks: {len(chunks)}")
+    print(f"Chunks con beneficio: {len(titled_chunks)}")
+    print(f"Chunks sin beneficio: {len(untitled_chunks)}")
+    print(f"Títulos únicos detectados: {len(detected_titles)}")
+    print(
+        "Chunks relacionados con escolaridad: "
+        f"{len(escolaridad_chunks)}"
+    )
+
+    print("\n=== TÍTULOS DETECTADOS ===")
+
+    for title in detected_titles:
+        print(f"[title] {title}")
+
+    print("\n=== CHUNKS DE ESCOLARIDAD ===")
+
+    for chunk in escolaridad_chunks:
+        print("-" * 80)
+        print(f"chunk_id: {chunk['chunk_id']}")
+        print(f"page: {chunk['page']}")
+        print(f"section: {chunk['section']}")
+        print(f"benefit_title: {chunk['benefit_title']}")
+        print(f"text:\n{chunk['text']}")
 
 def save_chunks(chunks: list[dict]) -> None:
     """
@@ -432,9 +533,16 @@ def save_chunks(chunks: list[dict]) -> None:
 
 def main():
     chunks = extract_pdf_chunks()
-    save_chunks(chunks)
 
-    print("Chunks generados correctamente")
+    if not chunks:
+        raise RuntimeError(
+            "No se generaron chunks desde el documento."
+        )
+
+    save_chunks(chunks)
+    print_diagnostics(chunks)
+
+    print("\nChunks generados correctamente")
     print(f"PDF origen: {PDF_PATH}")
     print(f"Total chunks: {len(chunks)}")
     print(f"Archivo salida: {OUTPUT_PATH}")

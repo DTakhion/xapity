@@ -1,215 +1,10 @@
-# # rag/scripts/retrieve_context.py
-# from pathlib import Path
-# import json
-# import requests
-# import numpy as np
-
-
-# # =========================
-# # Configuración
-# # =========================
-
-# BASE_DIR = Path(__file__).resolve().parents[1]
-
-# EMBEDDINGS_PATH = (
-#     BASE_DIR
-#     / "embeddings"
-#     / "manual_beneficios_2025_2027_embeddings.json"
-# )
-
-# OLLAMA_URL = "http://localhost:11434/api/embeddings"
-# MODEL_NAME = "nomic-embed-text"
-
-# TOP_K = 3 # antes 5
-# MIN_SCORE = 0.65 # antes 0.45
-
-# # =========================
-# # Utilidades
-# # =========================
-
-# def load_embeddings() -> list[dict]:
-#     """
-#     Carga embeddings previamente generados.
-#     """
-#     if not EMBEDDINGS_PATH.exists():
-#         raise FileNotFoundError(
-#             f"No se encontró archivo de embeddings: {EMBEDDINGS_PATH}"
-#         )
-
-#     with open(EMBEDDINGS_PATH, "r", encoding="utf-8") as f:
-#         return json.load(f)
-
-
-# def generate_query_embedding(query: str) -> list[float]:
-#     """
-#     Genera embedding para la pregunta del usuario.
-#     """
-#     payload = {
-#         "model": MODEL_NAME,
-#         "prompt": query,
-#     }
-
-#     response = requests.post(
-#         OLLAMA_URL,
-#         json=payload,
-#         timeout=120,
-#     )
-
-#     response.raise_for_status()
-#     data = response.json()
-
-#     return data["embedding"]
-
-
-# def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
-#     """
-#     Calcula similitud coseno entre dos vectores.
-#     """
-#     a = np.array(vec_a, dtype=np.float32)
-#     b = np.array(vec_b, dtype=np.float32)
-
-#     denominator = np.linalg.norm(a) * np.linalg.norm(b)
-
-#     if denominator == 0:
-#         return 0.0
-
-#     return float(np.dot(a, b) / denominator)
-
-
-# def retrieve_context(
-#     query: str,
-#     top_k: int = TOP_K,
-#     min_score: float = MIN_SCORE,
-# ) -> dict:
-#     """
-#     Recupera los chunks más relevantes para una pregunta.
-#     """
-#     embedded_chunks = load_embeddings()
-#     query_embedding = generate_query_embedding(query)
-
-#     scored_chunks = []
-
-#     for item in embedded_chunks:
-#         score = cosine_similarity(
-#             query_embedding,
-#             item["embedding"],
-#         )
-
-#         if score >= min_score:
-#             scored_chunks.append(
-#                 {
-#                     "chunk_id": item["chunk_id"],
-#                     "score": round(score, 4),
-#                     "text": item["text"],
-#                     "metadata": item.get("metadata", {}),
-#                 }
-#             )
-
-#     scored_chunks.sort(
-#         key=lambda x: x["score"],
-#         reverse=True,
-#     )
-
-#     matches = scored_chunks[:top_k]
-
-#     return {
-#         "query": query,
-#         "top_k": top_k,
-#         "min_score": min_score,
-#         "matches_count": len(matches),
-#         "matches": matches,
-#     }
-
-
-# def print_results(results: dict) -> None:
-#     """
-#     Imprime resultados de manera legible en terminal.
-#     """
-#     print("\n==============================")
-#     print("Consulta")
-#     print("==============================")
-#     print(results["query"])
-
-#     print("\n==============================")
-#     print("Resultados encontrados")
-#     print("==============================")
-#     print(f"Total matches: {results['matches_count']}")
-
-#     for index, match in enumerate(results["matches"], start=1):
-#         metadata = match.get("metadata", {})
-
-#         print("\n------------------------------")
-#         print(f"Resultado #{index}")
-#         print(f"Chunk ID: {match['chunk_id']}")
-#         print(f"Score: {match['score']}")
-#         print(f"Fuente: {metadata.get('source')}")
-#         print(f"Página: {metadata.get('page')}")
-#         print("------------------------------")
-#         print(match["text"][:900])
-
-
-# def main():
-#     import argparse
-
-#     parser = argparse.ArgumentParser(
-#         description="Recupera contexto relevante desde embeddings RAG."
-#     )
-
-#     parser.add_argument(
-#         "query",
-#         type=str,
-#         help="Pregunta o consulta del usuario.",
-#     )
-
-#     parser.add_argument(
-#         "--top-k",
-#         type=int,
-#         default=TOP_K,
-#         help="Cantidad máxima de chunks a recuperar.",
-#     )
-
-#     parser.add_argument(
-#         "--min-score",
-#         type=float,
-#         default=MIN_SCORE,
-#         help="Score mínimo de similitud coseno.",
-#     )
-
-#     parser.add_argument(
-#         "--json",
-#         action="store_true",
-#         help="Imprime salida en formato JSON.",
-#     )
-
-#     args = parser.parse_args()
-
-#     results = retrieve_context(
-#         query=args.query,
-#         top_k=args.top_k,
-#         min_score=args.min_score,
-#     )
-
-#     if args.json:
-#         print(
-#             json.dumps(
-#                 results,
-#                 ensure_ascii=False,
-#                 indent=2,
-#             )
-#         )
-#     else:
-#         print_results(results)
-
-
-# if __name__ == "__main__":
-#     main()
-
 # rag/scripts/retrieve_context.py
 from pathlib import Path
 import json
 import requests
 import numpy as np
 import re
+import unicodedata
 
 # =========================
 # Configuración
@@ -226,13 +21,45 @@ EMBEDDINGS_PATH = (
 OLLAMA_URL = "http://localhost:11434/api/embeddings"
 MODEL_NAME = "nomic-embed-text"
 
-TOP_K = 5
-MIN_SCORE = 0.50
-
+TOP_K = 2 # podria necesitar 3
+MIN_SCORE = 0.65
+MAX_SCORE_GAP = 0.07
 
 # =========================
 # Utilidades
 # =========================
+
+def normalize_search_text(text: str) -> str:
+    """
+    Normaliza texto para comparaciones léxicas.
+
+    - Convierte a minúsculas.
+    - Elimina tildes y diacríticos.
+    - Normaliza espacios.
+    """
+    if not text:
+        return ""
+
+    text = text.casefold()
+
+    text = unicodedata.normalize(
+        "NFKD",
+        text,
+    )
+
+    text = "".join(
+        char
+        for char in text
+        if not unicodedata.combining(char)
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
 
 def load_embeddings() -> list[dict]:
     """
@@ -256,9 +83,13 @@ def generate_query_embedding(query: str) -> list[float]:
     if not query:
         raise ValueError("La consulta no puede estar vacía.")
 
+    query_embedding_text = (
+        f"search_query: {query}"
+    )
+    
     payload = {
         "model": MODEL_NAME,
-        "prompt": query,
+        "prompt": query_embedding_text,
     }
 
     try:
@@ -276,28 +107,74 @@ def generate_query_embedding(query: str) -> list[float]:
         ) from exc
 
     data = response.json()
-
-    if "embedding" not in data:
+    
+    embedding = data.get("embedding")
+    
+    if not embedding:
         raise RuntimeError(
-            f"Respuesta inesperada desde Ollama: {data}"
+            "Ollama no retornó un embedding válido "
+            f"para la consulta. Respuesta: {data}"
         )
+    
+    if not isinstance(embedding, list):
+        raise TypeError(
+            "El embedding de la consulta "
+            "no es una lista."
+        )
+        
+    if not all(
+        isinstance(value, (int, float))
+        for value in embedding
+    ):
+        raise TypeError(
+            "El embedding de la consulta contiene "
+            "valores no numéricos."
+        )
+    
+    return embedding
 
-    return data["embedding"]
 
-
-def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+def cosine_similarity(
+    vec_a: list[float],
+    vec_b: list[float],
+) -> float:
     """
     Calcula similitud coseno entre dos vectores.
     """
-    a = np.array(vec_a, dtype=np.float32)
-    b = np.array(vec_b, dtype=np.float32)
+    a = np.asarray(
+        vec_a,
+        dtype=np.float32,
+    )
 
-    denominator = np.linalg.norm(a) * np.linalg.norm(b)
+    b = np.asarray(
+        vec_b,
+        dtype=np.float32,
+    )
+
+    if a.ndim != 1 or b.ndim != 1:
+        raise ValueError(
+            "Los embeddings deben ser vectores "
+            "unidimensionales."
+        )
+
+    if a.shape != b.shape:
+        raise ValueError(
+            "Dimensiones incompatibles: "
+            f"consulta={a.shape}, "
+            f"documento={b.shape}"
+        )
+
+    denominator = (
+        np.linalg.norm(a)
+        * np.linalg.norm(b)
+    )
 
     if denominator == 0:
         return 0.0
 
-    return float(np.dot(a, b) / denominator)
+    return float(
+        np.dot(a, b) / denominator
+    )
 
 
 def retrieve_context(
@@ -335,8 +212,10 @@ def retrieve_context(
         adjusted_score = score
         
         benefit_title = item.get("benefit_title") or metadata.get("benefit_title") or ""
-        query_norm = query.lower()
-        title_norm = benefit_title.lower()
+        query_norm = normalize_search_text(query)
+        title_norm = normalize_search_text(
+            benefit_title
+        )
         
         if benefit_title and title_norm in query_norm:
             adjusted_score += 0.08
@@ -344,7 +223,16 @@ def retrieve_context(
         title_words = [
             word
             for word in re.findall(r"\w+", title_norm)
-            if len(word) >= 4 and word not in {"bono", "beneficio", "asignación", "permiso"}
+            if (
+                len(word) >= 4
+                and word
+                not in {
+                    "bono",
+                    "beneficio",
+                    "asignacion",
+                    "permiso",
+                }
+            )
         ]
         
         query_words = set(re.findall(r"\w+", query_norm))
@@ -354,7 +242,10 @@ def retrieve_context(
         if matches_title_words > 0:
             adjusted_score += min(0.10, matches_title_words * 0.04)
             
-        adjusted_score = min(adjusted_score, 1.0)
+        adjusted_score = round(
+            adjusted_score,
+            6,
+        )
 
         if adjusted_score >= min_score:
             scored_chunks.append(
@@ -393,7 +284,17 @@ def retrieve_context(
         reverse=True,
     )
 
-    matches = scored_chunks[:top_k]
+    if not scored_chunks:
+        matches = []
+    else:
+        best_score = scored_chunks[0]["score"]
+        relative_threshold = best_score - MAX_SCORE_GAP
+        
+        matches = [
+            match
+            for match in scored_chunks
+            if match["score"] >= relative_threshold
+        ][:top_k]
 
     return {
         "query": query,
