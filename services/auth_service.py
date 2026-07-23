@@ -45,6 +45,10 @@ from services.email_service import (
     send_invitation_email,
 )
 
+from services.subscription_service import (
+    create_trial_for_organization,
+)
+
 load_dotenv()
 
 # ============================================================
@@ -266,12 +270,80 @@ async def start_user_registration(
     }
 
 
+# async def verify_user_registration(
+#     email: str,
+#     code: str,
+# ) -> Dict[str, Any]:
+#     """
+#     Verifies a pending registration code and creates the final user.
+#     """
+#     normalized_email = str(email).strip().lower()
+
+#     existing_user = get_user_by_email(normalized_email)
+
+#     if existing_user:
+#         raise ValueError("El correo ya está registrado")
+
+#     pending = get_pending_registration_by_email(normalized_email)
+
+#     if not pending:
+#         raise ValueError("No existe una solicitud pendiente para este correo")
+
+#     now = datetime.now(timezone.utc)
+
+#     expires_at = pending.get("expiresAt")
+    
+#     if expires_at and expires_at.tzinfo is None:
+#         expires_at = expires_at.replace(tzinfo=timezone.utc)
+    
+#     if expires_at and expires_at < now:
+#         raise ValueError("El código de verificación expiró")
+
+#     attempts = int(pending.get("attempts") or 0)
+
+#     if attempts >= REGISTRATION_MAX_ATTEMPTS:
+#         raise ValueError("Se superó el máximo de intentos de verificación")
+
+#     verification_code_hash = pending.get("verificationCodeHash")
+
+#     if not verification_code_hash:
+#         raise ValueError("Solicitud de verificación inválida")
+
+#     if not verify_registration_code(code, verification_code_hash):
+#         increment_pending_registration_attempts(normalized_email)
+#         raise ValueError("Código de verificación inválido")
+
+#     user_doc = {
+#         "userId": str(uuid.uuid4()),
+#         "businessId": pending["businessId"],
+#         "name": pending["name"],
+#         "email": pending["email"],
+#         "passwordHash": pending["passwordHash"],
+#         "phone": pending.get("phone"),
+#         "organizationName": pending["organizationName"],
+#         "role": pending["role"],
+#         "authProvider": "local",
+#         "isEmailVerified": True,
+#         "isActive": True,
+#         "isDeleted": False,
+#         "createdAt": now,
+#         "updatedAt": now,
+#     }
+
+#     inserted_user = insert_user(user_doc)
+#     mark_pending_registration_used(normalized_email)
+
+#     inserted_user.pop("passwordHash", None)
+
+#     return inserted_user
+
 async def verify_user_registration(
     email: str,
     code: str,
 ) -> Dict[str, Any]:
     """
-    Verifies a pending registration code and creates the final user.
+    Verifies a pending registration code, creates the final user,
+    and initializes the organization's Trial subscription.
     """
     normalized_email = str(email).strip().lower()
 
@@ -288,10 +360,10 @@ async def verify_user_registration(
     now = datetime.now(timezone.utc)
 
     expires_at = pending.get("expiresAt")
-    
+
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    
+
     if expires_at and expires_at < now:
         raise ValueError("El código de verificación expiró")
 
@@ -327,6 +399,12 @@ async def verify_user_registration(
     }
 
     inserted_user = insert_user(user_doc)
+
+    create_trial_for_organization(
+        business_id=inserted_user["businessId"],
+        created_by_user_id=inserted_user["userId"],
+    )
+
     mark_pending_registration_used(normalized_email)
 
     inserted_user.pop("passwordHash", None)

@@ -12,6 +12,8 @@ from datetime import datetime, timezone, date, timedelta
 # Esta es la importanción correcta para los endpoints de Staff
 from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
 
+from schemas.subscription import OrganizationUsageResponse
+
 #from services.staff_repo import create_staff, get_staff_list
 from services.staff_repo import (
     create_staff,
@@ -65,6 +67,20 @@ from services.appointment_repo import (
     get_appointment,
     update_appointment,
     delete_appointment,
+)
+
+from services.subscription_service import (
+    initialize_subscription_storage,
+    get_organization_usage,
+    reserve_question_credit,
+    complete_question_credit,
+    release_question_credit,
+    SubscriptionNotFoundError,
+    SubscriptionInactiveError,
+    QuotaExceededError,
+    UsageRequestConflictError,
+    UsageEventNotFoundError,
+    InvalidUsageEventStateError,
 )
 
 from schemas.xapity_chat import (
@@ -135,6 +151,15 @@ from services.qicore_client import gate as qicore_gate
 
 
 app = FastAPI(title="xapity", version="0.1.0")
+
+# Migrate startup event to FastAPI lifespan API.
+# Current implementation is intentionally kept for compatibility.
+@app.on_event("startup")
+def startup_subscription_storage() -> None:
+    """
+    Ensures subscription and usage-event indexes exist in MongoDB.
+    """
+    initialize_subscription_storage()
 
 #agregado por felix ortiz 16-03
 app.add_middleware(
@@ -353,33 +378,33 @@ async def auth_register_verify_endpoint(payload: AuthRegisterVerifyRequest):
             detail="Internal error while verifying registration.",
         ) from exc
 
-@app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
-async def auth_register_endpoint(payload: AuthRegisterRequest):
-    try:
-        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+# @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
+# async def auth_register_endpoint(payload: AuthRegisterRequest):
+#     try:
+#         business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
         
-        user = await register_user(
-            payload=payload,
-            business_id=business_id,
-        )
+#         user = await register_user(
+#             payload=payload,
+#             business_id=business_id,
+#         )
         
-        # business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else "1"
+#         # business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else "1"
 
-        # user = await register_user(
-        #     payload=payload,
-        #     business_id=business_id,
-        # )
+#         # user = await register_user(
+#         #     payload=payload,
+#         #     business_id=business_id,
+#         # )
 
-        return user
+#         return user
 
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+#     except ValueError as exc:
+#         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error while registering user.",
-        ) from exc
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail="Internal error while registering user.",
+#         ) from exc
 
 
 @app.post("/auth/login", response_model=AuthLoginResponse)
@@ -463,6 +488,47 @@ async def auth_me_endpoint(
         "user": user,
     }
 
+@app.get(
+    "/subscriptions/usage",
+    response_model=OrganizationUsageResponse,
+)
+async def get_subscription_usage_endpoint(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    Returns the authenticated organization's subscription and quota.
+
+    The businessId is always obtained from the authenticated user.
+    It is never accepted from the frontend.
+    """
+    authorization = f"{credentials.scheme} {credentials.credentials}"
+    user = await get_current_auth_user(authorization)
+
+    business_id = str(user.get("businessId") or "").strip()
+
+    if not business_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Authenticated user does not have a businessId.",
+        )
+
+    try:
+        return get_organization_usage(
+            business_id=business_id,
+        )
+
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving subscription usage.",
+        ) from exc
+
 @app.post("/auth/invitations", response_model=AuthInviteUserResponse, status_code=201)
 async def auth_invite_user_endpoint(
     payload: AuthInviteUserRequest,
@@ -526,29 +592,236 @@ async def auth_accept_invitation_endpoint(payload: AuthAcceptInvitationRequest):
             detail="Internal error while accepting invitation.",
         ) from exc
 
+# @app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
+# async def xapity_maf_chat_endpoint(
+#     req: RagAnswerRequest,
+#     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+#     x_request_id: Optional[str] = Header(default=None),
+# ):
+#     request_id = x_request_id or str(uuid.uuid4())
+
+#     authorization = f"{credentials.scheme} {credentials.credentials}"
+#     user = await get_current_auth_user(authorization)
+
+#     assert_maf_user(user)
+
+#     result = answer_hybrid_question(
+#         query=req.query,
+#     )
+
+#     now = datetime.now(timezone.utc)
+
+#     log_document = {
+#         "requestId": request_id,
+#         "businessId": MAF_BUSINESS_ID,
+#         "userId": user.get("userId"),
+#         "userEmail": user.get("email"),
+#         "query": req.query,
+#         "answer": result.get("answer"),
+#         "status": result.get("status"),
+#         "confidence": result.get("confidence"),
+#         "matchesCount": result.get("matches_count"),
+#         "sources": result.get("sources", []),
+#         "createdAt": now,
+#         "metadata": {
+#             "endpoint": "/xapity-maf/chat",
+#             "ragVersion": "hybrid-v1",
+#             "mode": result.get("mode"),
+#         },
+#     }
+
+#     try:
+#         insert_maf_rag_query_log(log_document)
+#         #await insert_maf_rag_query_log(log_document)
+#     except Exception:
+#         pass
+
+#     return result
+
 @app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
 async def xapity_maf_chat_endpoint(
     req: RagAnswerRequest,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     x_request_id: Optional[str] = Header(default=None),
 ):
-    request_id = x_request_id or str(uuid.uuid4())
+    """
+    Executes the Xapity MAF hybrid chat with organization-level
+    subscription quota control.
+
+    Flow:
+        authenticate user
+        -> validate MAF tenant
+        -> reserve credit
+        -> execute hybrid engine
+        -> complete credit
+
+    On a technical execution failure:
+        -> release reserved credit
+    """
+    request_id = (
+        str(x_request_id).strip()
+        if x_request_id
+        else str(uuid.uuid4())
+    )
 
     authorization = f"{credentials.scheme} {credentials.credentials}"
     user = await get_current_auth_user(authorization)
 
     assert_maf_user(user)
 
-    result = answer_hybrid_question(
-        query=req.query,
-    )
+    business_id = str(user.get("businessId") or "").strip()
+    user_id = str(user.get("userId") or "").strip()
+
+    if not business_id or not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_authenticated_user",
+                "message": "Authenticated user does not have tenant information.",
+                "request_id": request_id,
+            },
+        )
+
+    # ========================================================
+    # 1. RESERVE SUBSCRIPTION CREDIT
+    # ========================================================
+
+    try:
+        reserve_question_credit(
+            business_id=business_id,
+            user_id=user_id,
+            endpoint="/xapity-maf/chat",
+            request_id=request_id,
+            credits=1,
+        )
+
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "subscription_not_found",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except SubscriptionInactiveError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "subscription_inactive",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "subscription_quota_exceeded",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except UsageRequestConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "request_id_conflict",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "subscription_reservation_failed",
+                "message": "No fue posible reservar el crédito de consulta.",
+                "request_id": request_id,
+            },
+        ) from exc
+
+    # ========================================================
+    # 2. EXECUTE HYBRID ENGINE
+    # ========================================================
+
+    try:
+        result = answer_hybrid_question(
+            query=req.query,
+        )
+
+    except Exception as execution_exc:
+        try:
+            release_question_credit(
+                business_id=business_id,
+                request_id=request_id,
+                failure_type="technical_error",
+            )
+        except Exception:
+            # The original execution failure remains the primary error.
+            # This secondary failure should be logged server-side later.
+            pass
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "xapity_maf_execution_failed",
+                "message": "No fue posible procesar la consulta.",
+                "request_id": request_id,
+            },
+        ) from execution_exc
+
+    # ========================================================
+    # 3. COMPLETE SUBSCRIPTION CREDIT
+    # ========================================================
+
+    try:
+        complete_question_credit(
+            business_id=business_id,
+            request_id=request_id,
+            engine_mode=result.get("mode"),
+        )
+
+    except (
+        UsageEventNotFoundError,
+        InvalidUsageEventStateError,
+    ) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "subscription_completion_invalid_state",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "subscription_completion_failed",
+                "message": (
+                    "La respuesta fue generada, pero no fue posible "
+                    "confirmar el consumo del crédito."
+                ),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    # ========================================================
+    # 4. RAG AUDIT LOG
+    # ========================================================
 
     now = datetime.now(timezone.utc)
 
     log_document = {
         "requestId": request_id,
-        "businessId": MAF_BUSINESS_ID,
-        "userId": user.get("userId"),
+        "businessId": business_id,
+        "userId": user_id,
         "userEmail": user.get("email"),
         "query": req.query,
         "answer": result.get("answer"),
@@ -566,8 +839,8 @@ async def xapity_maf_chat_endpoint(
 
     try:
         insert_maf_rag_query_log(log_document)
-        #await insert_maf_rag_query_log(log_document)
     except Exception:
+        # The audit log must not invalidate an already successful answer.
         pass
 
     return result
