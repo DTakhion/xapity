@@ -86,7 +86,6 @@ from services.subscription_service import (
 from schemas.xapity_chat import (
     XapityChatRequest,
     XapityChatResponse,
-    XapityIntentAnalysis,
     XapityResponseMetadata,
 )
 
@@ -132,9 +131,15 @@ from jose import JWTError, jwt
 #from services.xapity_service import detect_xapity_intent, build_xapity_reply
 from services.xapity_service import detect_xapity_intent, build_xapity_reply, normalize_message
 
-from services.sales_service import get_sales_total_for_period
-from schemas.xapity_luca import XapityLucaRequest, XapityLucaResponse
-from xapity_luca.service import handle_xapity_luca_request
+#from services.sales_service import get_sales_total_for_period
+from schemas.luca_sales import (
+    LucaSalesChatRequest,
+    LucaSalesChatResponse,
+)
+
+from luca.sales_agent import (
+    ask_sales_agent,
+)
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
@@ -285,39 +290,6 @@ def assert_admin_user(user: Dict[str, Any]) -> None:
             detail="Solo usuarios admin pueden invitar nuevos usuarios.",
         )
 
-# @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
-# async def auth_register_endpoint(payload: AuthRegisterRequest):
-#     """
-#     Registra un usuario local en MongoDB.
-
-#     MVP:
-#     - No verifica email todavía.
-#     - Crea businessId automáticamente.
-#     - Guarda passwordHash, nunca password plano.
-#     """
-#     try:
-#         if is_maf_email(payload.email):
-#             payload.businessId = MAF_BUSINESS_ID
-
-#         user = await register_user(payload)
-#         return user
-    
-#     # try:
-#     #     user = await register_user(payload)
-#     #     return user
-
-#     except ValueError as exc:
-#         raise HTTPException(
-#             status_code=400,
-#             detail=str(exc),
-#         ) from exc
-
-#     except Exception as exc:
-#         raise HTTPException(
-#             status_code=500,
-#             detail="Internal error while registering user.",
-#         ) from exc
-
 @app.post("/auth/register/start", response_model=AuthRegisterStartResponse)
 async def auth_register_start_endpoint(payload: AuthRegisterRequest):
     """
@@ -377,34 +349,6 @@ async def auth_register_verify_endpoint(payload: AuthRegisterVerifyRequest):
             status_code=500,
             detail="Internal error while verifying registration.",
         ) from exc
-
-# @app.post("/auth/register", response_model=AuthUserResponse, status_code=201)
-# async def auth_register_endpoint(payload: AuthRegisterRequest):
-#     try:
-#         business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
-        
-#         user = await register_user(
-#             payload=payload,
-#             business_id=business_id,
-#         )
-        
-#         # business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else "1"
-
-#         # user = await register_user(
-#         #     payload=payload,
-#         #     business_id=business_id,
-#         # )
-
-#         return user
-
-#     except ValueError as exc:
-#         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-#     except Exception as exc:
-#         raise HTTPException(
-#             status_code=500,
-#             detail="Internal error while registering user.",
-#         ) from exc
 
 
 @app.post("/auth/login", response_model=AuthLoginResponse)
@@ -592,51 +536,9 @@ async def auth_accept_invitation_endpoint(payload: AuthAcceptInvitationRequest):
             detail="Internal error while accepting invitation.",
         ) from exc
 
-# @app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
-# async def xapity_maf_chat_endpoint(
-#     req: RagAnswerRequest,
-#     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-#     x_request_id: Optional[str] = Header(default=None),
-# ):
-#     request_id = x_request_id or str(uuid.uuid4())
-
-#     authorization = f"{credentials.scheme} {credentials.credentials}"
-#     user = await get_current_auth_user(authorization)
-
-#     assert_maf_user(user)
-
-#     result = answer_hybrid_question(
-#         query=req.query,
-#     )
-
-#     now = datetime.now(timezone.utc)
-
-#     log_document = {
-#         "requestId": request_id,
-#         "businessId": MAF_BUSINESS_ID,
-#         "userId": user.get("userId"),
-#         "userEmail": user.get("email"),
-#         "query": req.query,
-#         "answer": result.get("answer"),
-#         "status": result.get("status"),
-#         "confidence": result.get("confidence"),
-#         "matchesCount": result.get("matches_count"),
-#         "sources": result.get("sources", []),
-#         "createdAt": now,
-#         "metadata": {
-#             "endpoint": "/xapity-maf/chat",
-#             "ragVersion": "hybrid-v1",
-#             "mode": result.get("mode"),
-#         },
-#     }
-
-#     try:
-#         insert_maf_rag_query_log(log_document)
-#         #await insert_maf_rag_query_log(log_document)
-#     except Exception:
-#         pass
-
-#     return result
+# ============================================================
+# XAPITY-MAF
+# ============================================================
 
 @app.post("/xapity-maf/chat", response_model=RagAnswerResponse)
 async def xapity_maf_chat_endpoint(
@@ -846,45 +748,62 @@ async def xapity_maf_chat_endpoint(
     return result
 
 # ============================================================
-# XAPITY LUCA
+# XAPITY LUCA — SALES AGENT
 # ============================================================
 
-@app.post("/xapity-luca/chat", response_model=XapityLucaResponse)
-async def xapity_luca_chat_endpoint(
-    req: XapityLucaRequest,
+
+@app.post(
+    "/xapity-luca/sales/chat",
+    response_model=LucaSalesChatResponse,
+)
+def xapity_luca_sales_chat_endpoint(
+    req: LucaSalesChatRequest,
     x_request_id: Optional[str] = Header(default=None),
 ):
     """
-    Chat financiero Xapity-Luca.
+    Agente comercial determinista de Luca.
+
+    Flujo:
+        request HTTP
+        -> sales intent router
+        -> sales query service
+        -> Mongo
+        -> sales response builder
+        -> respuesta estructurada
 
     MVP:
-    - Sin restricción de usuario.
-    - business_id puede venir en el body.
-    - Si no viene, usa LUCA_BUSINESS_ID desde .env.
-    - requested_by puede venir en el body para auditoría.
+    - El businessId se recibe desde el body.
+    - No requiere autenticación todavía.
+    - No utiliza LLM.
+    - Las consultas y respuestas son deterministas.
     """
 
-    request_id = x_request_id or str(uuid.uuid4())
+    request_id = (
+        str(x_request_id).strip()
+        if x_request_id
+        else str(uuid.uuid4())
+    )
 
     try:
-        response = handle_xapity_luca_request(req)
-        return response
+        result = ask_sales_agent(
+            question=req.question,
+            business_id=req.business_id,
+            year=req.year,
+            month=req.month,
+            limit=req.limit,
+            raise_errors=True,
+        )
 
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "xapity_luca_data_not_found",
-                "message": str(exc),
-                "request_id": request_id,
-            },
-        ) from exc
+        return {
+            "requestId": request_id,
+            **result,
+        }
 
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "xapity_luca_invalid_request",
+                "error": "luca_sales_invalid_request",
                 "message": str(exc),
                 "request_id": request_id,
             },
@@ -894,8 +813,11 @@ async def xapity_luca_chat_endpoint(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "xapity_luca_internal_error",
-                "message": str(exc),
+                "error": "luca_sales_internal_error",
+                "message": (
+                    "No fue posible procesar la consulta "
+                    "comercial."
+                ),
                 "request_id": request_id,
             },
         ) from exc
@@ -1197,19 +1119,6 @@ async def delete_service_endpoint(serviceId: str):
 
     return deleted_service
 
-def get_previous_month_range(today: date | None = None) -> tuple[date, date]:
-    today = today or date.today()
-
-    first_day_current_month = today.replace(day=1)
-    last_day_previous_month = first_day_current_month - timedelta(days=1)
-    first_day_previous_month = last_day_previous_month.replace(day=1)
-
-    return first_day_previous_month, last_day_previous_month
-
-
-def format_clp(value: float) -> str:
-    return f"${int(round(value)):,.0f}".replace(",", ".")
-
 def get_next_weekday(target_weekday: int, today: date | None = None) -> date:
     """
     Retorna la próxima fecha para un día de la semana.
@@ -1222,32 +1131,6 @@ def get_next_weekday(target_weekday: int, today: date | None = None) -> date:
         days_ahead += 7
 
     return today + timedelta(days=days_ahead)
-
-
-# def extract_requested_date_from_message(message: str) -> date | None:
-#     normalized = normalize_message(message)
-
-#     weekday_map = {
-#         "lunes": 0,
-#         "martes": 1,
-#         "miercoles": 2,
-#         "jueves": 3,
-#         "viernes": 4,
-#         "sabado": 5,
-#         "domingo": 6,
-#     }
-
-#     if "hoy" in normalized:
-#         return date.today()
-
-#     if "manana" in normalized:
-#         return date.today() + timedelta(days=1)
-
-#     for word, weekday in weekday_map.items():
-#         if word in normalized:
-#             return get_next_weekday(weekday)
-
-#     return None
 
 def extract_requested_date_from_message(message: str) -> date | None:
     """
@@ -1626,81 +1509,7 @@ async def xapity_chat_endpoint(
                     "request_id": request_id,
                 },
             ) from exc
-    
-    # # 4. Caso: consultar staff por servicio
-    # if analysis.intent == "staff_by_service":
-    #     try:
-    #         service = await find_service_from_message(req.message)
-
-    #         if not service:
-    #             service_query = extract_service_query_from_staff_message(req.message)
-
-    #             return XapityChatResponse(
-    #                 request_id=request_id,
-    #                 message=req.message,
-    #                 analysis=analysis,
-    #                 reply=(
-    #                     f"No encontré un servicio llamado '{service_query}'. "
-    #                     "Puedes revisar los servicios disponibles o escribir el nombre del servicio con más detalle."
-    #                 ),
-    #                 data={
-    #                     "serviceFound": False,
-    #                     "serviceQuery": service_query,
-    #                 },
-    #                 metadata=metadata,
-    #             )
-
-    #         staff_matches = await find_staff_by_service_id(service["serviceId"])
-
-    #         if not staff_matches:
-    #             return XapityChatResponse(
-    #                 request_id=request_id,
-    #                 message=req.message,
-    #                 analysis=analysis,
-    #                 reply=(
-    #                     f"Encontré el servicio {service['name']}, pero todavía no hay staff asociado "
-    #                     "a ese servicio."
-    #                 ),
-    #                 data={
-    #                     "serviceFound": True,
-    #                     "service": service,
-    #                     "staff": [],
-    #                     "total": 0,
-    #                 },
-    #                 metadata=metadata,
-    #             )
-
-    #         staff_names = ", ".join(
-    #             staff_member.get("name", "Staff sin nombre")
-    #             for staff_member in staff_matches
-    #         )
-
-    #         return XapityChatResponse(
-    #             request_id=request_id,
-    #             message=req.message,
-    #             analysis=analysis,
-    #             reply=(
-    #                 f"Para {service['name']} tengo disponible el siguiente staff: "
-    #                 f"{staff_names}."
-    #             ),
-    #             data={
-    #                 "serviceFound": True,
-    #                 "service": service,
-    #                 "staff": staff_matches,
-    #                 "total": len(staff_matches),
-    #             },
-    #             metadata=metadata,
-    #         )
-
-    #     except Exception as exc:
-    #         raise HTTPException(
-    #             status_code=500,
-    #             detail={
-    #                 "error": "xapity_staff_by_service_failed",
-    #                 "request_id": request_id,
-    #             },
-    #         ) from exc
-    
+        
     # 5. Caso: crear agenda / appointment
     if analysis.intent == "create_appointment":
         try:
@@ -1817,61 +1626,7 @@ async def xapity_chat_endpoint(
                 },
             ) from exc
     
-    # 6. Caso: total de ventas / ingresos por venta
-    if analysis.intent == "sales_total":
-        try:
-            # MVP:
-            # businessId fijo para Luca.
-            # Más adelante debe venir desde auth / tenant context.
-            business_id = 5
-
-            # MVP:
-            # por ahora resolvemos "mes pasado".
-            start_date, end_date = get_previous_month_range()
-
-            result = get_sales_total_for_period(
-                business_id=business_id,
-                start_date=start_date,
-                end_date=end_date,
-                include_documents=[33, 34],
-            )
-
-            total = float(result.get("totalIngresosVenta") or 0)
-            total_documentos = int(result.get("totalDocumentos") or 0)
-
-            reply = (
-                f"El monto total de ingresos por ventas para el periodo "
-                f"{start_date.isoformat()} al {end_date.isoformat()} "
-                f"es de {format_clp(total)}, considerando {total_documentos} documentos."
-            )
-
-            return XapityChatResponse(
-                request_id=request_id,
-                message=req.message,
-                analysis=analysis,
-                reply=reply,
-                data={
-                    "businessId": business_id,
-                    "startDate": start_date.isoformat(),
-                    "endDate": end_date.isoformat(),
-                    "totalIngresosVenta": total,
-                    "totalIngresosVentaFormatted": format_clp(total),
-                    "totalDocumentos": total_documentos,
-                    "byDocumentType": result.get("byDocumentType", []),
-                },
-                metadata=metadata,
-            )
-
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "xapity_sales_total_failed",
-                    "request_id": request_id,
-                },
-            ) from exc
-
-    # 7. Caso: resto de intenciones
+    # 6. Caso: resto de intenciones
     return XapityChatResponse(
         request_id=request_id,
         message=req.message,
