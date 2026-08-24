@@ -128,6 +128,23 @@ class LucaSalesChatTrace(BaseModel):
             "Consulta ejecutada por sales_query_service."
         ),
     )
+    
+    operation: str | None = Field(
+        default=None,
+        description=(
+            "Operación solicitada sobre la intención comercial: "
+            "query o explain."
+        ),
+    )
+
+    execution_type: str | None = Field(
+        default=None,
+        alias="executionType",
+        description=(
+            "Tipo de ejecución realizada por el agente, ya sea "
+            "una consulta o un análisis determinista."
+        ),
+    )
 
     source: str | None = Field(
         default=None,
@@ -163,8 +180,8 @@ class LucaSalesChatTrace(BaseModel):
     implemented: bool | None = Field(
         default=None,
         description=(
-            "Indica si la intención reconocida tiene una "
-            "consulta implementada."
+            "Indica si la intención y operación reconocidas "
+            "tienen una capacidad implementada."
         ),
     )
 
@@ -284,7 +301,7 @@ class LucaSalesChatResponse(BaseModel):
         default=None,
         description=(
             "Resultado estructurado proveniente del servicio "
-            "de consultas comerciales."
+            "de consulta o análisis comercial."
         ),
     )
 

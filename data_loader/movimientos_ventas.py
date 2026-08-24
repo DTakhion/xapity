@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+import hashlib
 
 import requests
 from dotenv import load_dotenv
@@ -302,7 +303,25 @@ def load_luca_access_token(
             f"{token_path}."
         )
 
-    return extracted_token.removeprefix("Bearer ").strip()
+    normalized_token = (
+        extracted_token
+        .removeprefix("Bearer ")
+        .strip()
+    )
+
+    print(
+        "[auth] Token desde archivo:",
+        token_path,
+    )
+
+    print(
+        "[auth] Fingerprint:",
+        hashlib.sha256(
+            normalized_token.encode("utf-8")
+        ).hexdigest()[:12],
+    )
+
+    return normalized_token
 
 
 # ---------------------------------------------------------------------------

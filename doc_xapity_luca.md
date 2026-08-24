@@ -10,12 +10,6 @@ Para solo un mes
 
 ``` bash
 python3 -m tests.test_movimientos_ventas \
-  --year 2026 \
-  --month 1
-```
-
-``` bash
-python3 -m tests.test_movimientos_ventas \
   --business-id 70 \
   --year 2026 \
   --month 1
@@ -144,6 +138,85 @@ python3 -m luca.sales_agent \
   --question "¿Cuánto dinero tengo por cobrar?"
 ```
 
-``` bash
+```text
+1. sales_intents.py
+   ↓
+   declara QUÉ sabe responder Xapity
+
+2. sales_intent_router.py
+   ↓
+   entiende QUÉ está preguntando el usuario
+   + extrae entidades
+
+3. sales_query_service.py
+   ↓
+   CALCULA LA RESPUESTA REAL
+   leyendo luca_sales_items
+```
+
+```text
+1. sales_intents.py
+   → existe SALES_OVERVIEW
+
+2. sales_intent_router.py
+   → interpreta la pregunta
+   → retorna IntentResult(
+         intent=SALES_OVERVIEW,
+         ...
+     )
+
+3. sales_query_service.py
+   → get_sales_overview(...)
+   → calcula los datos reales desde Mongo
+
+4. sales_agent.py
+   → conecta todo lo anterior
+   → construye la respuesta final
+```
+
+```text
+CAPA 1 — sales_intents.py
+¿Qué capacidades existen?
+
+CAPA 2 — sales_intent_router.py
+¿Qué está preguntando el usuario?
+
+CAPA 3 — sales_query_service.py
+¿Cuál es el resultado numérico/factual correcto?
+
+CAPA 4 — sales_agent.py
+¿Qué piezas tengo que ejecutar y en qué orden?
+
+CAPA 5 — sales_response_builder.py
+¿Cómo expreso esos hechos al usuario?
+```
+
+```text
+SalesIntent
+MONTHLY_SALES
+      │
+      ├── QUERY
+      │     ¿Cuánto vendí el mes pasado?
+      │
+      └── EXPLAIN
+            ¿Por qué vendí menos el mes pasado?
+```
+
+``` text
+sales_intents.py
+├── SalesIntent <- Intención/Pregunta
+├── SalesOperation <- Explicación/Operación
+└── IntentResult
+```
+
+``` text
 
 ```
+
+
+``` text
+
+```
+
+
+

@@ -28,9 +28,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from typing import Callable, Pattern
 
-from luca.sales_intents import IntentResult, SalesIntent
+from luca.sales_intents import IntentResult, SalesIntent, SalesOperation
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ class IntentRule:
     intent: SalesIntent
     patterns: tuple[Pattern[str], ...]
     confidence: float = 1.0
+    operation: SalesOperation = SalesOperation.QUERY
     require_all: bool = False
     extractor: EntityExtractor | None = None
 
@@ -155,6 +157,13 @@ CUSTOMER_STOP_WORDS: tuple[str, ...] = (
     " pagadas",
     " anuladas",
     " vencidas",
+    " el mes pasado",
+    " el mes anterior",
+    " mes pasado",
+    " mes anterior",
+    " el ano pasado",
+    " ano pasado",
+    " ano anterior",
 )
 
 
@@ -304,18 +313,26 @@ def extract_relative_period(
     """
     Extrae períodos relativos simples.
 
-    Ejemplos:
+    Soporta:
 
     - este mes
     - mes actual
     - este año
     - año actual
-
-    La fecha se obtiene desde el sistema en el momento de ejecutar.
+    - mes pasado
+    - mes anterior
+    - último mes
+    - año pasado
+    - año anterior
     """
 
     now = datetime.now()
+
     entities: dict[str, int] = {}
+
+    # --------------------------------------------------------
+    # Mes actual
+    # --------------------------------------------------------
 
     if any(
         expression in normalized_question
@@ -328,7 +345,43 @@ def extract_relative_period(
         entities["year"] = now.year
         entities["month"] = now.month
 
-    elif any(
+        return entities
+
+    # --------------------------------------------------------
+    # Mes anterior
+    # --------------------------------------------------------
+
+    if any(
+        expression in normalized_question
+        for expression in (
+            "mes pasado",
+            "mes anterior",
+            "ultimo mes",
+            "mes previo",
+        )
+    ):
+        previous_month = (
+            now
+            - relativedelta(
+                months=1
+            )
+        )
+
+        entities["year"] = (
+            previous_month.year
+        )
+
+        entities["month"] = (
+            previous_month.month
+        )
+
+        return entities
+
+    # --------------------------------------------------------
+    # Año actual
+    # --------------------------------------------------------
+
+    if any(
         expression in normalized_question
         for expression in (
             "este ano",
@@ -337,6 +390,26 @@ def extract_relative_period(
         )
     ):
         entities["year"] = now.year
+
+        return entities
+
+    # --------------------------------------------------------
+    # Año anterior
+    # --------------------------------------------------------
+
+    if any(
+        expression in normalized_question
+        for expression in (
+            "ano pasado",
+            "ano anterior",
+            "ultimo ano",
+        )
+    ):
+        entities["year"] = (
+            now.year - 1
+        )
+
+        return entities
 
     return entities
 
@@ -566,8 +639,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bcuanto\s+le\s+he\s+vendido\s+a\b",
             r"\bcuanto\s+vendi\s+a\b",
             r"\bventas?\s+(?:del cliente\s+|de\s+|a\s+)\w+",
-            r"\bfacturas?\s+(?:del cliente\s+|de\s+)\w+",
-            r"\bdocumentos?\s+(?:del cliente\s+|de\s+)\w+",
+            r"\bfacturas?\s+del\s+cliente\s+\w+",
+            r"\bdocumentos?\s+del\s+cliente\s+\w+",
         ),
         confidence=1.0,
         extractor=extract_customer_detail_entities,
@@ -584,6 +657,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bnotas?\s+de\s+credito\b",
             r"\bnota\s+credito\b",
             r"\bdocumentos?\s+de\s+credito\b",
+            r"\bque\s+notas?\s+de\s+credito\s+tengo\b",
+            r"\bcuantas?\s+notas?\s+de\s+credito\s+tengo\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -598,6 +673,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bventas?\s+anuladas?\b",
             r"\bcuantos?\s+documentos?\s+estan\s+anulados?\b",
             r"\bque\s+documentos?\s+fueron\s+anulados?\b",
+            r"\bque\s+documentos?\s+tengo\s+anulados?\b",
+            r"\bque\s+facturas?\s+tengo\s+anuladas?\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -612,6 +689,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bdocumentos?\s+con\s+linkage\b",
             r"\bcuantos?\s+documentos?\s+tienen\s+linkage\b",
             r"\bhay\s+documentos?\s+vinculados?\b",
+            r"\bque\s+documentos?\s+estan\s+vinculados?\b",
+            r"\bque\s+facturas?\s+estan\s+vinculadas?\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -627,6 +706,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bdocumento\s+mas\s+grande\b",
             r"\bmayor\s+factura\b",
             r"\bventa\s+mas\s+alta\b",
+            r"\bcual\s+es\s+mi\s+venta\s+de\s+mayor\s+monto\b",
+            r"\bcual\s+fue\s+mi\s+venta\s+de\s+mayor\s+monto\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -642,6 +723,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bdocumento\s+mas\s+pequeno\b",
             r"\bmenor\s+factura\b",
             r"\bventa\s+mas\s+baja\b",
+            r"\bcual\s+es\s+mi\s+venta\s+de\s+menor\s+monto\b",
+            r"\bcual\s+fue\s+mi\s+venta\s+de\s+menor\s+monto\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -659,6 +742,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bvencimiento\s+de\s+hoy\b",
             r"\bdocumentos?\s+por\s+vencer\s+hoy\b",
             r"\bfacturas?\s+que\s+vencen\s+hoy\b",
+            r"\bque\s+documentos?\s+vencen\s+hoy\b",
+            r"\bque\s+facturas?\s+vencen\s+hoy\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -672,6 +757,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bvencimiento\s+esta\s+semana\b",
             r"\bdocumentos?\s+por\s+vencer\s+esta\s+semana\b",
             r"\bfacturas?\s+que\s+vencen\s+esta\s+semana\b",
+            r"\bque\s+documentos?\s+vencen\s+esta\s+semana\b",
+            r"\bque\s+facturas?\s+vencen\s+esta\s+semana\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -685,6 +772,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bvencimiento\s+este\s+mes\b",
             r"\bdocumentos?\s+por\s+vencer\s+este\s+mes\b",
             r"\bfacturas?\s+que\s+vencen\s+este\s+mes\b",
+            r"\bque\s+documentos?\s+vencen\s+este\s+mes\b",
+            r"\bque\s+facturas?\s+vencen\s+este\s+mes\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -698,6 +787,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bno\s+tienen\s+fecha\s+de\s+vencimiento\b",
             r"\bdocumentos?\s+sin\s+vencimiento\b",
             r"\bfacturas?\s+sin\s+vencimiento\b",
+            r"\bque\s+documentos?\s+no\s+tienen\s+fecha\s+de\s+vencimiento\b",
+            r"\bque\s+facturas?\s+no\s+tienen\s+fecha\s+de\s+vencimiento\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -713,6 +804,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bmorosidad\b",
             r"\bclientes?\s+morosos?\b",
             r"\bpendientes?\s+vencidos?\b",
+            r"\bque\s+documentos?\s+tengo\s+vencidos?\b",
+            r"\bque\s+facturas?\s+tengo\s+vencidas?\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -721,11 +814,63 @@ RULES: tuple[IntentRule, ...] = (
     # ------------------------------------------------------------------
     # Cuentas por cobrar
     # ------------------------------------------------------------------
+    
+    IntentRule(
+        name="receivable_documents_execute",
+        intent=SalesIntent.RECEIVABLE_DOCUMENTS,
+        operation=SalesOperation.EXECUTE,
+        patterns=compile_patterns(
+            r"\benvia\s+(?:un\s+)?correo\b.*\b(?:cobranza|facturas?|documentos?)\b",
+            r"\benviar\s+(?:un\s+)?correo\b.*\b(?:cobranza|facturas?|documentos?)\b",
+            r"\bmanda\s+(?:un\s+)?correo\b.*\b(?:cobranza|facturas?|documentos?)\b",
+            r"\bmandar\s+(?:un\s+)?correo\b.*\b(?:cobranza|facturas?|documentos?)\b",
+            r"\bcontacta\s+(?:por\s+correo\s+)?al\s+cliente\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bcontactar\s+(?:por\s+correo\s+)?al\s+cliente\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\benvia\s+(?:un\s+)?correo\s+de\s+cobranza\b",
+            r"\bprepara\s+y\s+envia\s+(?:un\s+)?correo\s+de\s+cobranza\b",
+        ),
+        confidence=1.0,
+        extractor=extract_common_entities,
+    ),
+
+    IntentRule(
+        name="receivable_documents_propose",
+        intent=SalesIntent.RECEIVABLE_DOCUMENTS,
+        operation=SalesOperation.PROPOSE,
+        patterns=compile_patterns(
+            r"\bque\s+me\s+propones\s+hacer\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bque\s+podria\s+hacer\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bque\s+podemos\s+hacer\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bcomo\s+deberia\s+priorizar\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bque\s+acciones?\s+recomiendas?\b.*\b(?:cobro|cobranza|facturas?\s+pendientes)\b",
+            r"\bque\s+acciones?\s+propones?\b.*\b(?:cobro|cobranza|facturas?\s+pendientes)\b",
+        ),
+        confidence=1.0,
+        extractor=extract_common_entities,
+    ),
+
+    IntentRule(
+        name="receivable_documents_explain",
+        intent=SalesIntent.RECEIVABLE_DOCUMENTS,
+        operation=SalesOperation.EXPLAIN,
+        patterns=compile_patterns(
+            r"\bdonde\s+se\s+concentra\b.*\bpendiente\s+por\s+cobrar\b",
+            r"\bdonde\s+se\s+concentran\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bque\s+explica\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bcomo\s+se\s+distribuye\b.*\bpendiente\s+por\s+cobrar\b",
+            r"\bcomo\s+se\s+distribuyen\b.*\b(?:facturas?|documentos?)\s+pendientes\b",
+            r"\bque\s+clientes?\s+concentran\b.*\b(?:saldo|monto|pendiente)\b",
+        ),
+        confidence=1.0,
+        extractor=extract_common_entities,
+    ),
 
     IntentRule(
         name="receivable_documents",
         intent=SalesIntent.RECEIVABLE_DOCUMENTS,
         patterns=compile_patterns(
+            r"\bque\s+facturas?\s+tengo\s+pendientes\b",
+            r"\bque\s+documentos?\s+tengo\s+pendientes\b",
             r"\bmu[eé]strame\s+(?:los\s+)?documentos?\s+por\s+cobrar\b",
             r"\blista\s+(?:de\s+)?documentos?\s+por\s+cobrar\b",
             r"\bcuales\s+son\s+(?:las\s+)?facturas?\s+pendientes\b",
@@ -766,6 +911,9 @@ RULES: tuple[IntentRule, ...] = (
             r"\bclientes?\s+con\s+multiples\s+documentos\b",
             r"\bclientes?\s+que\s+repiten\b",
             r"\bclientes?\s+con\s+mas\s+documentos\b",
+            r"\bque\s+clientes?\s+tienen\s+mas\s+de\s+un\s+documento\b",
+            r"\bque\s+clientes?\s+tienen\s+varias\s+facturas\b",
+            r"\bque\s+clientes?\s+tienen\s+multiples\s+documentos\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -815,6 +963,9 @@ RULES: tuple[IntentRule, ...] = (
             r"\bque\s+tipo\s+de\s+documento\s+predomina\b",
             r"\bmonto\s+por\s+tipo\s+de\s+documento\b",
             r"\bcuanto\s+representa\s+cada\s+tipo\b",
+            r"\bque\s+tipos?\s+de\s+documentos?\s+tengo\b",
+            r"\bcuales\s+son\s+los\s+tipos?\s+de\s+documentos?\b",
+            r"\bque\s+clases?\s+de\s+documentos?\s+tengo\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -829,6 +980,10 @@ RULES: tuple[IntentRule, ...] = (
             r"\bmonto\s+por\s+estado\b",
             r"\bque\s+estados?\s+existen\b",
             r"\bdistribucion\s+por\s+estado\b",
+            r"\bcual\s+es\s+el\s+estado\s+de\s+(?:mis\s+)?facturas?\b",
+            r"\bcual\s+es\s+el\s+estado\s+de\s+(?:mis\s+)?documentos?\b",
+            r"\bcomo\s+estan\s+(?:mis\s+)?facturas?\b",
+            r"\bcomo\s+estan\s+(?:mis\s+)?documentos?\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -852,6 +1007,38 @@ RULES: tuple[IntentRule, ...] = (
         confidence=0.95,
         extractor=extract_common_entities,
     ),
+    
+    IntentRule(
+        name="sales_trend_propose",
+        intent=SalesIntent.SALES_TREND,
+        operation=SalesOperation.PROPOSE,
+        patterns=compile_patterns(
+            r"\bque\s+me\s+propones\s+hacer\b.*\b(?:tendencia|ventas)\b",
+            r"\bque\s+podria\s+hacer\b.*\b(?:mejorar|revertir|cambiar)\b.*\b(?:tendencia|ventas)\b",
+            r"\bque\s+podemos\s+hacer\b.*\b(?:mejorar|revertir|cambiar)\b.*\b(?:tendencia|ventas)\b",
+            r"\bcomo\s+podria\s+mejorar\b.*\b(?:tendencia|ventas)\b",
+            r"\bcomo\s+podemos\s+mejorar\b.*\b(?:tendencia|ventas)\b",
+            r"\bque\s+acciones?\s+recomiendas?\b.*\b(?:tendencia|ventas)\b",
+            r"\bque\s+acciones?\s+propones?\b.*\b(?:tendencia|ventas)\b",
+        ),
+        confidence=1.0,
+        extractor=extract_common_entities,
+    ),
+    
+    IntentRule(
+        name="sales_trend_explain",
+        intent=SalesIntent.SALES_TREND,
+        operation=SalesOperation.EXPLAIN,
+        patterns=compile_patterns(
+            r"\bque\s+explica\s+(?:la\s+)?tendencia\s+de\s+(?:mis\s+|las\s+)?ventas\b",
+            r"\bque\s+explica\s+(?:la\s+)?evolucion\s+de\s+(?:mis\s+|las\s+)?ventas\b",
+            r"\b(?:por\s+que|porque)\b.*\b(?:tendencia|evolucion)\b.*\bventas\b",
+            r"\bque\s+factores?\s+explican\b.*\b(?:tendencia|evolucion)\b.*\bventas\b",
+            r"\bque\s+esta\s+explicando\b.*\b(?:tendencia|evolucion)\b.*\bventas\b",
+        ),
+        confidence=1.0,
+        extractor=extract_common_entities,
+    ),
 
     IntentRule(
         name="sales_trend",
@@ -862,8 +1049,25 @@ RULES: tuple[IntentRule, ...] = (
             r"\bcomo\s+han\s+cambiado\s+(?:las\s+)?ventas\b",
             r"\bcrecimiento\s+de\s+(?:las\s+)?ventas\b",
             r"\bventas?\s+en\s+el\s+tiempo\b",
+            r"\bcomo\s+vienen\s+evolucionando\s+(?:mis\s+|las\s+)?ventas\b",
+            r"\bcomo\s+vienen\s+(?:mis\s+|las\s+)?ventas\b",
         ),
         confidence=0.95,
+        extractor=extract_common_entities,
+    ),
+    
+    IntentRule(
+        name="monthly_sales_explain",
+        intent=SalesIntent.MONTHLY_SALES,
+        operation=SalesOperation.EXPLAIN,
+        patterns=compile_patterns(
+            r"\b(?:por\s+que|porque)\b.*\b(?:vendi|vendimos|ventas?)\b.*\b(?:mes\s+pasado|mes\s+anterior)\b",
+            r"\b(?:por\s+que|porque)\b.*\b(?:vendi|vendimos|ventas?)\b.*\b(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b",
+            r"\bque\s+explica\b.*\b(?:ventas?|caida|aumento)\b.*\b(?:mes\s+pasado|mes\s+anterior)\b",
+            r"\bque\s+paso\s+con\b.*\b(?:las\s+)?ventas\b.*\b(?:mes\s+pasado|mes\s+anterior)\b",
+            r"\b(?:por\s+que|porque)\b.*\b(?:bajaron|subieron|cayeron|aumentaron)\b.*\bventas\b",
+        ),
+        confidence=1.0,
         extractor=extract_common_entities,
     ),
 
@@ -876,6 +1080,10 @@ RULES: tuple[IntentRule, ...] = (
             r"\bventas?\s+del\s+mes\b",
             r"\bventas?\s+mensuales?\b",
             r"\bmonto\s+vendido\s+en\s+el\s+mes\b",
+            r"\bcuanto\s+vendi\s+(?:el\s+)?mes\s+pasado\b",
+            r"\bcuanto\s+vendi\s+(?:el\s+)?mes\s+anterior\b",
+            r"\bventas?\s+del\s+mes\s+pasado\b",
+            r"\bventas?\s+del\s+mes\s+anterior\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -891,9 +1099,14 @@ RULES: tuple[IntentRule, ...] = (
         patterns=compile_patterns(
             r"\bcuanto\s+he\s+vendido\b",
             r"\bcuanto\s+vendi\b",
+            r"\bcuanto\s+vendimos\b",
+            r"\bcuanto\s+hemos\s+vendido\b",
             r"\bmonto\s+total\s+de\s+ventas\b",
             r"\btotal\s+vendido\b",
             r"\btotal\s+de\s+ventas\b",
+            r"\bventa\s+total\b",
+            r"\bventas?\s+totales?\b",
+            r"\bmonto\s+vendido\b",
             r"\bcuanto\s+dinero\s+representan\s+(?:las\s+)?ventas\b",
         ),
         confidence=1.0,
@@ -909,6 +1122,8 @@ RULES: tuple[IntentRule, ...] = (
             r"\bnumero\s+de\s+documentos\b",
             r"\bcuantas?\s+facturas?\s+(?:tengo|existen|hay)\b",
             r"\btotal\s+de\s+facturas\b",
+            r"\bcuantos?\s+documentos?\s+de\s+venta\b",
+            r"\bcuantos?\s+documentos?\s+comerciales\b",
         ),
         confidence=1.0,
         extractor=extract_common_entities,
@@ -918,11 +1133,12 @@ RULES: tuple[IntentRule, ...] = (
         name="sales_overview",
         intent=SalesIntent.SALES_OVERVIEW,
         patterns=compile_patterns(
-            r"\bresumen\s+(?:general\s+)?de\s+(?:las\s+)?ventas\b",
-            r"\bpanorama\s+(?:general\s+)?de\s+(?:las\s+)?ventas\b",
-            r"\bvision\s+general\s+de\s+(?:las\s+)?ventas\b",
-            r"\bestado\s+general\s+de\s+(?:las\s+)?ventas\b",
-            r"\bcomo\s+estan\s+(?:las\s+)?ventas\b",
+            r"\bresumen\s+(?:general\s+)?de\s+(?:(?:mis|las)\s+)?ventas\b",
+            r"\bdame\s+(?:un\s+)?resumen\s+(?:general\s+)?de\s+(?:(?:mis|las)\s+)?ventas\b",
+            r"\bpanorama\s+(?:general\s+)?de\s+(?:(?:mis|las)\s+)?ventas\b",
+            r"\bvision\s+general\s+de\s+(?:(?:mis|las)\s+)?ventas\b",
+            r"\bestado\s+general\s+de\s+(?:(?:mis|las)\s+)?ventas\b",
+            r"\bcomo\s+estan\s+(?:(?:mis|las)\s+)?ventas\b",
             r"\bdame\s+un\s+resumen\s+comercial\b",
             r"\bresumen\s+comercial\b",
         ),
@@ -997,6 +1213,7 @@ class SalesIntentRouter:
 
             return IntentResult(
                 intent=rule.intent,
+                operation=rule.operation,
                 confidence=rule.confidence,
                 entities=entities,
                 matched_rule=rule.name,
@@ -1052,6 +1269,16 @@ if __name__ == "__main__":
         "¿Cuántos clientes distintos existen?",
         "Dame un resumen general de las ventas.",
         "Cuéntame una historia sobre contabilidad.",
+        "¿Cuánto vendí el mes pasado?",
+        "¿Por qué vendí menos el mes pasado?", 
+        "¿Por qué vendí menos en julio?", 
+        "¿Qué pasó con las ventas del mes pasado?", 
+        "¿Cómo vienen evolucionando mis ventas?",
+        "¿Qué explica la tendencia de mis ventas?",
+        "¿Qué me propones hacer para mejorar la tendencia de mis ventas?",
+        "¿Qué facturas tengo pendientes?",
+        "¿Dónde se concentra lo que tengo pendiente por cobrar?",
+        "¿Qué me propones hacer con las facturas pendientes?",
     )
 
     for example_question in example_questions:
@@ -1060,6 +1287,7 @@ if __name__ == "__main__":
         print("=" * 80)
         print(f"Pregunta   : {example_question}")
         print(f"Intent     : {result.intent.value}")
+        print(f"Operación  : {result.operation.value}")
         print(f"Confianza  : {result.confidence}")
         print(f"Regla      : {result.matched_rule}")
         print(f"Entidades  : {result.entities}")
