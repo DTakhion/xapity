@@ -339,6 +339,21 @@ def _extract_year(
 def _extract_month(
     document: dict[str, Any],
 ) -> int | None:
+    """
+    Extrae el mes calendario real del documento.
+
+    Prioriza la fecha documental porque el campo top-level
+    ``month`` puede representar el scope utilizado durante
+    la extracción (por ejemplo, 0 = todos los meses).
+    """
+
+    document_date = _extract_document_date(
+        document
+    )
+
+    if document_date is not None:
+        return document_date.month
+
     direct_month = _safe_int(
         _first_value(
             document,
@@ -353,12 +368,13 @@ def _extract_month(
         )
     )
 
-    if direct_month is not None:
+    if (
+        direct_month is not None
+        and 1 <= direct_month <= 12
+    ):
         return direct_month
 
-    document_date = _extract_document_date(document)
-
-    return document_date.month if document_date else None
+    return None
 
 
 def _extract_document_date(
@@ -406,6 +422,52 @@ def _extract_document_date(
 
     return None
 
+def _extract_due_date(
+    document: dict[str, Any],
+) -> datetime | None:
+    """
+    Extrae la fecha de vencimiento del documento.
+    """
+
+    value = _first_value(
+        document,
+        (
+            "current.dueDate",
+            "normalized.dueDate",
+            "projection.dueDate",
+            "raw.fechaVencimiento",
+            "raw.dueDate",
+            "raw.fechaVcto",
+        ),
+    )
+
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value).strip()
+
+    formats = (
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+    )
+
+    for date_format in formats:
+        try:
+            return datetime.strptime(
+                text,
+                date_format,
+            )
+        except ValueError:
+            continue
+
+    return None
 
 def _extract_amount(
     document: dict[str, Any],
@@ -554,6 +616,22 @@ def _extract_source_key(
         )
     )
 
+def _extract_company_id(
+    document: dict[str, Any],
+) -> int | None:
+    return _safe_int(
+        _first_value(
+            document,
+            (
+                "current.companyId",
+                "normalized.companyId",
+                "projection.companyId",
+                "raw.idEmpresa",
+                "raw.companyId",
+            ),
+        )
+    )
+
 
 # ==================================================
 # FILTRO BASE
@@ -689,6 +767,7 @@ def _normalize_document_result(
     document: dict[str, Any],
 ) -> dict[str, Any]:
     document_date = _extract_document_date(document)
+    due_date = _extract_due_date(document)
     linkages = _extract_linkages(document)
 
     return {
@@ -701,12 +780,18 @@ def _normalize_document_result(
             if document_date
             else None
         ),
+        "dueDate": (
+            due_date.isoformat()
+            if due_date
+            else None
+        ),
         "documentCode": _extract_document_code(document),
         "documentName": _extract_document_name(document),
         "status": _extract_status(document),
         "amount": _extract_amount(document),
         "customerRut": _extract_customer_rut(document),
         "customerName": _extract_customer_name(document),
+        "companyId": _extract_company_id(document),
         "linkagesCount": len(linkages),
     }
 
@@ -715,6 +800,7 @@ def _normalize_document_result(
 # CONSULTA 1: OVERVIEW
 # ==================================================
 
+# SALES_OVERVIEW = "sales_overview" # “Dame un resumen de mis ventas”
 def get_sales_overview(
     *,
     business_id: int,
@@ -902,6 +988,61 @@ def get_sales_overview(
         },
     }
 
+def get_total_documents(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Responde:
+        ¿Cuántos documentos de venta tengo?
+        ¿Cuántas facturas tengo?
+        ¿Cuál es el total de documentos comerciales?
+    """
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        or get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    total_amount = sum(
+        _extract_amount(document)
+        for document in documents
+    )
+
+    return {
+        "queryType": "total_documents",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+        },
+        "result": {
+            "documentsCount": len(documents),
+            "totalAmount": total_amount,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+        },
+    }
+
 
 # ==================================================
 # CONSULTAS DETERMINISTAS BÁSICAS
@@ -959,6 +1100,112 @@ def get_total_receivable(
                 receivable_documents
             ),
             "totalAmount": total_amount,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+        },
+    }
+
+# ==================================================
+# CONSULTA: DOCUMENTOS POR COBRAR
+# ==================================================
+
+def get_receivable_documents(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    collection: Collection | None = None,
+    limit: int | None = 100,
+) -> dict[str, Any]:
+    """
+    Responde:
+        ¿Qué facturas tengo pendientes?
+        ¿Qué documentos tengo por cobrar?
+
+    Retorna documentos pendientes de cobro junto con
+    sus hechos comerciales básicos.
+
+    ``limit=None`` permite obtener todos los documentos,
+    útil para capas analíticas posteriores.
+    """
+
+    if limit is not None and limit <= 0:
+        raise ValueError(
+            "limit debe ser mayor que cero o None."
+        )
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        or get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    receivable_documents = [
+        document
+        for document in documents
+        if _is_receivable(document)
+    ]
+
+    total_amount = sum(
+        _extract_amount(document)
+        for document in receivable_documents
+    )
+
+    # Orden factual:
+    # primero los vencimientos más antiguos.
+    receivable_documents.sort(
+        key=lambda document: (
+            _extract_due_date(document)
+            or datetime.max.replace(
+                tzinfo=timezone.utc
+            )
+        )
+    )
+
+    normalized_documents = [
+        _normalize_document_result(document)
+        for document in receivable_documents
+    ]
+
+    returned_documents = (
+        normalized_documents[:limit]
+        if limit is not None
+        else normalized_documents
+    )
+
+    return {
+        "queryType": "receivable_documents",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+            "status": RECEIVABLE_STATUS,
+            "limit": limit,
+        },
+        "result": {
+            "documentsCount": len(
+                receivable_documents
+            ),
+            "returnedDocumentsCount": len(
+                returned_documents
+            ),
+            "totalAmount": total_amount,
+            "documents": returned_documents,
         },
         "metadata": {
             "source": DEFAULT_ITEMS_COLLECTION,
@@ -1109,6 +1356,271 @@ def get_cancelled_documents(
                 _normalize_document_result(document)
                 for document in cancelled_documents[:limit]
             ],
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+        },
+    }
+
+# ==================================================
+# CONSULTA: VENTAS MENSUALES
+# ==================================================
+
+def get_monthly_sales(
+    *,
+    business_id: int,
+    year: int,
+    month: int,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Responde:
+        ¿Cuánto vendí en un mes determinado?
+        ¿Cuánto vendí el mes pasado?
+    """
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        or get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    total_amount = sum(
+        _extract_amount(document)
+        for document in documents
+    )
+
+    return {
+        "queryType": "monthly_sales",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+        },
+        "result": {
+            "documentsCount": len(documents),
+            "totalAmount": total_amount,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+        },
+    }
+
+# ==================================================
+# CONSULTA: TENDENCIA DE VENTAS
+# ==================================================
+
+def get_sales_trend(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Responde:
+        ¿Cómo vienen evolucionando mis ventas?
+        ¿Cuál ha sido la tendencia de mis ventas?
+
+    Retorna una serie cronológica mensual determinista.
+    """
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        or get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    monthly_groups: dict[
+        tuple[int, int],
+        dict[str, Any],
+    ] = {}
+
+    for document in documents:
+        document_year = _extract_year(document)
+        document_month = _extract_month(document)
+
+        if (
+            document_year is None
+            or document_month is None
+        ):
+            continue
+
+        key = (
+            document_year,
+            document_month,
+        )
+
+        if key not in monthly_groups:
+            monthly_groups[key] = {
+                "year": document_year,
+                "month": document_month,
+                "documentsCount": 0,
+                "totalAmount": 0.0,
+            }
+
+        monthly_groups[key][
+            "documentsCount"
+        ] += 1
+
+        monthly_groups[key][
+            "totalAmount"
+        ] += _extract_amount(document)
+
+    periods = sorted(
+        monthly_groups.values(),
+        key=lambda item: (
+            item["year"],
+            item["month"],
+        ),
+    )
+
+    return {
+        "queryType": "sales_trend",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+        },
+        "result": {
+            "periodsCount": len(periods),
+            "periods": periods,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+        },
+    }
+
+# ==================================================
+# CONSULTA: VENTAS MENSUALES POR CLIENTE
+# ==================================================
+
+def get_monthly_sales_by_customer(
+    *,
+    business_id: int,
+    year: int,
+    month: int,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Retorna las ventas de un mes agrupadas por cliente.
+
+    Esta consulta entrega hechos deterministas que pueden
+    utilizarse posteriormente para explicar variaciones
+    y construir propuestas comerciales.
+    """
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        or get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    customer_groups: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    for document in documents:
+        customer_rut = _extract_customer_rut(
+            document
+        )
+
+        customer_name = _extract_customer_name(
+            document
+        )
+
+        customer_key = (
+            customer_rut
+            or customer_name
+        )
+
+        if not customer_key:
+            continue
+
+        normalized_key = customer_key.upper()
+
+        if normalized_key not in customer_groups:
+            customer_groups[normalized_key] = {
+                "customerRut": customer_rut,
+                "customerName": customer_name,
+                "documentsCount": 0,
+                "totalAmount": 0.0,
+            }
+
+        customer_groups[normalized_key][
+            "documentsCount"
+        ] += 1
+
+        customer_groups[normalized_key][
+            "totalAmount"
+        ] += _extract_amount(document)
+
+    customers = sorted(
+        customer_groups.values(),
+        key=lambda item: item["totalAmount"],
+        reverse=True,
+    )
+
+    total_amount = sum(
+        item["totalAmount"]
+        for item in customers
+    )
+
+    return {
+        "queryType": "monthly_sales_by_customer",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+        },
+        "result": {
+            "customersCount": len(customers),
+            "documentsCount": len(documents),
+            "totalAmount": total_amount,
+            "customers": customers,
         },
         "metadata": {
             "source": DEFAULT_ITEMS_COLLECTION,

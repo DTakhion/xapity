@@ -23,6 +23,7 @@ Capacidades actualmente conectadas:
 - TOTAL_RECEIVABLE
 - CREDIT_NOTES
 - CANCELLED_DOCUMENTS
+- TOTAL_DOCUMENTS
 
 Las demás intenciones reconocidas por el router retornan un estado
 "not_implemented" hasta que su consulta determinista sea incorporada
@@ -40,17 +41,41 @@ from typing import Any, Callable
 
 from pymongo.collection import Collection
 
+
 from luca.sales_intent_router import route_sales_intent
-from luca.sales_intents import IntentResult, SalesIntent
+from luca.sales_intents import (
+    IntentResult,
+    SalesIntent,
+    SalesOperation,
+)
 from luca.sales_query_service import (
     get_cancelled_documents,
     get_credit_notes,
+    get_monthly_sales,
+    get_receivable_documents,
+    get_sales_trend,
     get_sales_overview,
+    get_total_documents,
     get_total_receivable,
 )
 
 from luca.sales_response_builder import (
     build_sales_response_result,
+)
+
+from luca.sales_analysis_service import (
+    explain_monthly_sales,
+    explain_receivable_documents,
+    explain_sales_trend,
+)
+
+from luca.sales_proposal_service import (
+    propose_receivable_documents,
+    propose_sales_trend,
+)
+
+from luca.sales_execute_service import (
+    execute_receivable_documents,
 )
 
 # ==================================================
@@ -116,13 +141,57 @@ class SalesAgentResponse:
 # REGISTRO DE CAPACIDADES
 # ==================================================
 
+# SALES_OVERVIEW = "sales_overview" # “Dame un resumen de mis ventas”
+# TOTAL_DOCUMENTS = "total_documents" # ¿Cuántos documentos de venta tengo?
 
 QUERY_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
     SalesIntent.SALES_OVERVIEW: get_sales_overview,
+    SalesIntent.TOTAL_DOCUMENTS: get_total_documents,
+    SalesIntent.RECEIVABLE_DOCUMENTS: get_receivable_documents,
     SalesIntent.TOTAL_RECEIVABLE: get_total_receivable,
     SalesIntent.CREDIT_NOTES: get_credit_notes,
     SalesIntent.CANCELLED_DOCUMENTS: get_cancelled_documents,
+    SalesIntent.MONTHLY_SALES: get_monthly_sales,
+    SalesIntent.SALES_TREND: get_sales_trend,
 }
+
+EXPLAIN_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
+    SalesIntent.MONTHLY_SALES: explain_monthly_sales,
+    SalesIntent.SALES_TREND: explain_sales_trend,
+    SalesIntent.RECEIVABLE_DOCUMENTS: explain_receivable_documents,
+}
+
+PROPOSE_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
+    SalesIntent.SALES_TREND: propose_sales_trend,
+    SalesIntent.RECEIVABLE_DOCUMENTS: propose_receivable_documents,
+}
+
+EXECUTE_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
+    SalesIntent.RECEIVABLE_DOCUMENTS: execute_receivable_documents,
+}
+
+def _resolve_handler(
+    *,
+    intent: SalesIntent,
+    operation: SalesOperation,
+) -> SalesQueryHandler | None:
+    """
+    Resuelve el handler determinista según intención y operación.
+    """
+
+    if operation is SalesOperation.QUERY:
+        return QUERY_HANDLERS.get(intent)
+
+    if operation is SalesOperation.EXPLAIN:
+        return EXPLAIN_HANDLERS.get(intent)
+
+    if operation is SalesOperation.PROPOSE:
+        return PROPOSE_HANDLERS.get(intent)
+
+    if operation is SalesOperation.EXECUTE:
+        return EXECUTE_HANDLERS.get(intent)
+
+    return None
 
 
 # ==================================================
@@ -185,76 +254,6 @@ def _validate_request(
             "limit debe ser mayor que cero."
         )
 
-
-# ==================================================
-# FORMATO DE VALORES
-# ==================================================
-
-
-# def _format_clp(
-#     value: Any,
-# ) -> str:
-#     """
-#     Formatea un monto como peso chileno.
-
-#     Ejemplo:
-#         1250000 -> $1.250.000
-#     """
-
-#     try:
-#         amount = round(float(value))
-#     except (TypeError, ValueError):
-#         amount = 0
-
-#     formatted = f"{abs(amount):,}".replace(
-#         ",",
-#         ".",
-#     )
-
-#     sign = "-" if amount < 0 else ""
-
-#     return f"{sign}${formatted}"
-
-
-# def _format_period(
-#     *,
-#     year: int | None,
-#     month: int | None,
-# ) -> str:
-#     """
-#     Construye una descripción breve del período consultado.
-#     """
-
-#     month_names = {
-#         1: "enero",
-#         2: "febrero",
-#         3: "marzo",
-#         4: "abril",
-#         5: "mayo",
-#         6: "junio",
-#         7: "julio",
-#         8: "agosto",
-#         9: "septiembre",
-#         10: "octubre",
-#         11: "noviembre",
-#         12: "diciembre",
-#     }
-
-#     if year is not None and month is not None:
-#         return (
-#             f" durante {month_names[month]} "
-#             f"de {year}"
-#         )
-
-#     if year is not None:
-#         return f" durante {year}"
-
-#     if month is not None:
-#         return f" durante {month_names[month]}"
-
-#     return ""
-
-
 # ==================================================
 # RESOLUCIÓN DE CONTEXTO
 # ==================================================
@@ -314,6 +313,7 @@ def _resolve_query_parameters(
 def _build_handler_kwargs(
     *,
     intent: SalesIntent,
+    operation: SalesOperation,
     query_parameters: dict[str, Any],
     collection: Collection | None,
 ) -> dict[str, Any]:
@@ -332,263 +332,21 @@ def _build_handler_kwargs(
     if collection is not None:
         kwargs["collection"] = collection
 
-    intents_with_limit = {
+    query_intents_with_limit = {
         SalesIntent.CREDIT_NOTES,
         SalesIntent.CANCELLED_DOCUMENTS,
+        SalesIntent.RECEIVABLE_DOCUMENTS,
     }
 
-    if intent in intents_with_limit:
+    if (
+        operation is SalesOperation.QUERY
+        and intent in query_intents_with_limit
+    ):
         kwargs["limit"] = query_parameters[
             "limit"
         ]
 
     return kwargs
-
-
-# ==================================================
-# CONSTRUCCIÓN DE RESPUESTAS
-# ==================================================
-
-
-# def _build_sales_overview_answer(
-#     query_result: dict[str, Any],
-# ) -> str:
-#     result = query_result.get(
-#         "result",
-#         {},
-#     )
-
-#     filters = query_result.get(
-#         "filters",
-#         {},
-#     )
-
-#     period = _format_period(
-#         year=filters.get("year"),
-#         month=filters.get("month"),
-#     )
-
-#     total_documents = result.get(
-#         "totalDocuments",
-#         0,
-#     )
-
-#     total_amount = result.get(
-#         "totalAmount",
-#         0,
-#     )
-
-#     receivable_documents = result.get(
-#         "receivableDocuments",
-#         0,
-#     )
-
-#     receivable_amount = result.get(
-#         "receivableAmount",
-#         0,
-#     )
-
-#     unique_customers = result.get(
-#         "uniqueCustomers",
-#         0,
-#     )
-
-#     credit_notes = result.get(
-#         "creditNotes",
-#         0,
-#     )
-
-#     return (
-#         f"El resumen comercial{period} registra "
-#         f"{total_documents} documentos por un total de "
-#         f"{_format_clp(total_amount)}. "
-#         f"Actualmente hay {receivable_documents} documentos "
-#         f"por cobrar, equivalentes a "
-#         f"{_format_clp(receivable_amount)}. "
-#         f"Los documentos corresponden a "
-#         f"{unique_customers} clientes únicos y existen "
-#         f"{credit_notes} notas de crédito."
-#     )
-
-
-# def _build_total_receivable_answer(
-#     query_result: dict[str, Any],
-# ) -> str:
-#     result = query_result.get(
-#         "result",
-#         {},
-#     )
-
-#     filters = query_result.get(
-#         "filters",
-#         {},
-#     )
-
-#     period = _format_period(
-#         year=filters.get("year"),
-#         month=filters.get("month"),
-#     )
-
-#     documents_count = result.get(
-#         "documentsCount",
-#         0,
-#     )
-
-#     total_amount = result.get(
-#         "totalAmount",
-#         0,
-#     )
-
-#     if documents_count == 0:
-#         return (
-#             f"No encontré documentos por cobrar"
-#             f"{period}."
-#         )
-
-#     document_word = (
-#         "documento"
-#         if documents_count == 1
-#         else "documentos"
-#     )
-
-#     return (
-#         f"Tienes {_format_clp(total_amount)} por cobrar"
-#         f"{period}, distribuidos en "
-#         f"{documents_count} {document_word}."
-#     )
-
-
-# def _build_credit_notes_answer(
-#     query_result: dict[str, Any],
-# ) -> str:
-#     result = query_result.get(
-#         "result",
-#         {},
-#     )
-
-#     filters = query_result.get(
-#         "filters",
-#         {},
-#     )
-
-#     period = _format_period(
-#         year=filters.get("year"),
-#         month=filters.get("month"),
-#     )
-
-#     documents_count = result.get(
-#         "documentsCount",
-#         0,
-#     )
-
-#     total_amount = result.get(
-#         "totalAmount",
-#         0,
-#     )
-
-#     if documents_count == 0:
-#         return (
-#             f"No encontré notas de crédito"
-#             f"{period}."
-#         )
-
-#     note_word = (
-#         "nota de crédito"
-#         if documents_count == 1
-#         else "notas de crédito"
-#     )
-
-#     return (
-#         f"Encontré {documents_count} {note_word}"
-#         f"{period}, por un monto total de "
-#         f"{_format_clp(total_amount)}."
-#     )
-
-
-# def _build_cancelled_documents_answer(
-#     query_result: dict[str, Any],
-# ) -> str:
-#     result = query_result.get(
-#         "result",
-#         {},
-#     )
-
-#     filters = query_result.get(
-#         "filters",
-#         {},
-#     )
-
-#     period = _format_period(
-#         year=filters.get("year"),
-#         month=filters.get("month"),
-#     )
-
-#     documents_count = result.get(
-#         "documentsCount",
-#         0,
-#     )
-
-#     total_amount = result.get(
-#         "totalAmount",
-#         0,
-#     )
-
-#     if documents_count == 0:
-#         return (
-#             f"No encontré documentos anulados"
-#             f"{period}."
-#         )
-
-#     document_word = (
-#         "documento anulado"
-#         if documents_count == 1
-#         else "documentos anulados"
-#     )
-
-#     return (
-#         f"Encontré {documents_count} {document_word}"
-#         f"{period}, por un monto total de "
-#         f"{_format_clp(total_amount)}."
-#     )
-
-
-# def _build_answer(
-#     *,
-#     intent: SalesIntent,
-#     query_result: dict[str, Any],
-# ) -> str:
-#     """
-#     Construye una respuesta natural determinista.
-#     """
-
-#     builders: dict[
-#         SalesIntent,
-#         Callable[[dict[str, Any]], str],
-#     ] = {
-#         SalesIntent.SALES_OVERVIEW: (
-#             _build_sales_overview_answer
-#         ),
-#         SalesIntent.TOTAL_RECEIVABLE: (
-#             _build_total_receivable_answer
-#         ),
-#         SalesIntent.CREDIT_NOTES: (
-#             _build_credit_notes_answer
-#         ),
-#         SalesIntent.CANCELLED_DOCUMENTS: (
-#             _build_cancelled_documents_answer
-#         ),
-#     }
-
-#     builder = builders.get(intent)
-
-#     if builder is None:
-#         return (
-#             "La consulta fue reconocida, pero todavía no "
-#             "dispone de un constructor de respuesta."
-#         )
-
-#     return builder(query_result)
-
 
 # ==================================================
 # RESPUESTAS DE CONTROL
@@ -614,6 +372,7 @@ def _unknown_response(
         data=None,
         trace={
             "matchedRule": intent_result.matched_rule,
+            "operation": intent_result.operation.value,
             "source": "sales_intent_router",
             "deterministic": True,
             "elapsedMs": elapsed_ms,
@@ -643,6 +402,7 @@ def _not_implemented_response(
         data=None,
         trace={
             "matchedRule": intent_result.matched_rule,
+            "operation": intent_result.operation.value,
             "source": "sales_intent_router",
             "deterministic": True,
             "implemented": False,
@@ -775,8 +535,9 @@ class SalesAgent:
                 )
             )
 
-            handler = QUERY_HANDLERS.get(
-                intent_result.intent
+            handler = _resolve_handler(
+                intent=intent_result.intent,
+                operation=intent_result.operation,
             )
 
             if handler is None:
@@ -791,21 +552,23 @@ class SalesAgent:
 
             handler_kwargs = _build_handler_kwargs(
                 intent=intent_result.intent,
+                operation=intent_result.operation,
                 query_parameters=query_parameters,
                 collection=self._collection,
             )
 
-            query_result = handler(
+            execution_result = handler(
                 **handler_kwargs
             )
 
             response_build_result = (
                 build_sales_response_result(
                     intent=intent_result.intent,
-                    query_result=query_result,
+                    operation=intent_result.operation,
+                    execution_result=execution_result,
                 )
             )
-            
+
             answer = response_build_result.answer
 
             elapsed_ms = (
@@ -822,21 +585,32 @@ class SalesAgent:
                     "year": query_parameters["year"],
                     "month": query_parameters["month"],
                 },
-                data=query_result.get("result"),
+                data=(
+                    execution_result.get("result")
+                    or execution_result.get("analysis")
+                    or execution_result.get("proposal")
+                    or execution_result.get("execution")
+                ),
                 trace={
                     "matchedRule": (
                         intent_result.matched_rule
                     ),
-                    "queryType": query_result.get(
-                        "queryType"
+                    "operation": (
+                        intent_result.operation.value
                     ),
-                    "source": query_result.get(
+                    "executionType": (
+                        execution_result.get("queryType")
+                        or execution_result.get("analysisType")
+                        or execution_result.get("proposalType")
+                        or execution_result.get("executionType")
+                    ),
+                    "source": execution_result.get(
                         "metadata",
                         {},
                     ).get(
                         "source"
                     ),
-                    "generatedAt": query_result.get(
+                    "generatedAt": execution_result.get(
                         "metadata",
                         {},
                     ).get(

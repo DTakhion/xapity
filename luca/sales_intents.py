@@ -20,6 +20,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+class SalesOperation(str, Enum):
+    """
+    Tipo de operación solicitada por el usuario sobre una capacidad comercial.
+
+    La intención define sobre qué información se trabaja.
+    La operación define qué desea hacer el usuario con esa información.
+    """
+
+    QUERY = "query"
+    EXPLAIN = "explain"
+    PROPOSE = "propose"
+    EXECUTE = "execute"
 
 class SalesIntent(str, Enum):
     """
@@ -33,61 +45,61 @@ class SalesIntent(str, Enum):
     # Resumen general
     # ------------------------------------------------------------------
 
-    SALES_OVERVIEW = "sales_overview"
-    TOTAL_DOCUMENTS = "total_documents"
-    TOTAL_SALES_AMOUNT = "total_sales_amount"
-    TOTAL_CUSTOMERS = "total_customers"
+    SALES_OVERVIEW = "sales_overview" # “Dame un resumen de mis ventas”
+    TOTAL_DOCUMENTS = "total_documents" # ¿Cuántos documentos de venta tengo?
+    TOTAL_SALES_AMOUNT = "total_sales_amount" # ¿Cuánto he vendido?
+    TOTAL_CUSTOMERS = "total_customers" # ¿Cuántos clientes tengo?
 
     # ------------------------------------------------------------------
     # Cuentas por cobrar
     # ------------------------------------------------------------------
 
-    TOTAL_RECEIVABLE = "total_receivable"
-    RECEIVABLE_DOCUMENTS = "receivable_documents"
+    TOTAL_RECEIVABLE = "total_receivable" # ¿Cuánto tengo por cobrar?
+    RECEIVABLE_DOCUMENTS = "receivable_documents" # ¿Qué facturas tengo pendientes?
 
     # ------------------------------------------------------------------
     # Clientes
     # ------------------------------------------------------------------
 
-    TOP_CUSTOMERS = "top_customers"
-    CUSTOMER_DETAIL = "customer_detail"
-    CUSTOMERS_WITH_MULTIPLE_DOCUMENTS = "customers_with_multiple_documents"
+    TOP_CUSTOMERS = "top_customers" # ¿Quiénes son mis mejores clientes?
+    CUSTOMER_DETAIL = "customer_detail" # ¿Cuánto le he vendido a Frogmi?
+    CUSTOMERS_WITH_MULTIPLE_DOCUMENTS = "customers_with_multiple_documents" # ¿Qué clientes tienen más de un documento?
 
     # ------------------------------------------------------------------
     # Documentos comerciales
     # ------------------------------------------------------------------
 
-    CREDIT_NOTES = "credit_notes"
-    CANCELLED_DOCUMENTS = "cancelled_documents"
-    LINKED_DOCUMENTS = "linked_documents"
+    CREDIT_NOTES = "credit_notes" # ¿Qué notas de crédito tengo?
+    CANCELLED_DOCUMENTS = "cancelled_documents" # ¿Qué documentos tengo anulados?
+    LINKED_DOCUMENTS = "linked_documents" # ¿Qué documentos están vinculados?
 
-    LARGEST_DOCUMENT = "largest_document"
-    SMALLEST_DOCUMENT = "smallest_document"
+    LARGEST_DOCUMENT = "largest_document" # ¿Cuál es mi venta de mayor monto?
+    SMALLEST_DOCUMENT = "smallest_document" # ¿Cuál es mi venta de menor monto?
 
     # ------------------------------------------------------------------
     # Clasificaciones y agrupaciones
     # ------------------------------------------------------------------
 
-    DOCUMENT_TYPES = "document_types"
-    DOCUMENT_STATUS = "document_status"
+    DOCUMENT_TYPES = "document_types" # ¿Qué tipos de documentos tengo?, ¿Cuántas facturas y notas de crédito tengo?, Muéstrame la distribución por tipo de documento.
+    DOCUMENT_STATUS = "document_status" # ¿Cuál es el estado de mis facturas?, ¿Cuántas facturas están por cobrar?, Dame la distribución de documentos por estado.
 
     # ------------------------------------------------------------------
     # Fechas y vencimientos
     # ------------------------------------------------------------------
 
-    DOCUMENTS_DUE_TODAY = "documents_due_today"
-    DOCUMENTS_DUE_THIS_WEEK = "documents_due_this_week"
-    DOCUMENTS_DUE_THIS_MONTH = "documents_due_this_month"
-    OVERDUE_DOCUMENTS = "overdue_documents"
-    DOCUMENTS_WITHOUT_DUE_DATE = "documents_without_due_date"
+    DOCUMENTS_DUE_TODAY = "documents_due_today" # ¿Qué documentos vencen hoy?
+    DOCUMENTS_DUE_THIS_WEEK = "documents_due_this_week" # ¿Qué documentos vencen esta semana?
+    DOCUMENTS_DUE_THIS_MONTH = "documents_due_this_month" # ¿Qué documentos vencen este mes?
+    OVERDUE_DOCUMENTS = "overdue_documents" # ¿Qué documentos tengo vencidos?
+    DOCUMENTS_WITHOUT_DUE_DATE = "documents_without_due_date" # ¿Qué documentos no tienen fecha de vencimiento?
 
     # ------------------------------------------------------------------
     # Comparaciones y tendencias
     # ------------------------------------------------------------------
 
-    MONTHLY_SALES = "monthly_sales"
-    SALES_COMPARISON = "sales_comparison"
-    SALES_TREND = "sales_trend"
+    MONTHLY_SALES = "monthly_sales" # ¿Cuánto vendí el mes pasado?
+    SALES_COMPARISON = "sales_comparison" # ¿Vendí más este mes que el anterior?
+    SALES_TREND = "sales_trend"  # QUERY: evolución | EXPLAIN: qué la explica | PROPOSE: qué hacer al respecto
 
     # ------------------------------------------------------------------
     # Intención no reconocida
@@ -131,6 +143,7 @@ class IntentResult:
 
     intent: SalesIntent
     confidence: float
+    operation: SalesOperation = SalesOperation.QUERY
     entities: dict[str, Any] = field(default_factory=dict)
     matched_rule: str | None = None
     normalized_question: str | None = None
@@ -147,6 +160,11 @@ class IntentResult:
         if not isinstance(self.intent, SalesIntent):
             raise TypeError(
                 "intent debe ser una instancia de SalesIntent."
+            )
+        
+        if not isinstance(self.operation, SalesOperation):
+            raise TypeError(
+                "operation debe ser una instancia de SalesOperation."
             )
 
         if isinstance(self.confidence, bool) or not isinstance(
@@ -214,6 +232,7 @@ class IntentResult:
 
         return {
             "intent": self.intent.value,
+            "operation": self.operation.value,
             "confidence": self.confidence,
             "entities": dict(self.entities),
             "matchedRule": self.matched_rule,
