@@ -27,6 +27,7 @@ htmlcov/
 # Dataset + Administracion
 data/
 adm/
+tmp/
 
 # Luca reports
 luca/reports/output/

@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo import (
+    ASCENDING,
+    DESCENDING,
+    MongoClient,
+    ReturnDocument,
+)
 from pymongo.collection import Collection
 from pymongo.database import Database
 
@@ -334,21 +339,128 @@ def get_luca_sales_summary_collection() -> Collection:
 
 def get_luca_reports_collection() -> Collection:
     """
-    Contiene metadatos de reportes generados por Xapity.
+    Contiene el estado vigente de los reportes sincronizados
+    desde Luca.
+
+    Cada reporte se identifica lógicamente por:
+
+        businessId
+        reportType
+        queryFrom
+        queryTo
+
+    Ejemplo:
+
+        businessId = 70
+        reportType = general_balance
+        queryFrom = 2026-01-01
+        queryTo = 2026-09-04
     """
     collection = get_luca_db()["luca_reports"]
 
     collection.create_index(
         [
             ("businessId", ASCENDING),
-            ("createdAt", DESCENDING),
+            ("reportType", ASCENDING),
+            ("queryFrom", ASCENDING),
+            ("queryTo", ASCENDING),
         ],
-        name="idx_luca_reports_business",
+        unique=True,
+        name="uq_luca_report_scope",
     )
 
     collection.create_index(
-        [("runId", ASCENDING)],
-        name="idx_luca_reports_run_id",
+        [
+            ("businessId", ASCENDING),
+            ("reportType", ASCENDING),
+            ("queryTo", DESCENDING),
+        ],
+        name="idx_luca_reports_latest",
+    )
+
+    collection.create_index(
+        [
+            ("businessId", ASCENDING),
+            ("reportType", ASCENDING),
+            ("updatedAt", DESCENDING),
+        ],
+        name="idx_luca_reports_updated",
+    )
+
+    collection.create_index(
+        [
+            ("businessId", ASCENDING),
+            ("contentHash", ASCENDING),
+        ],
+        name="idx_luca_reports_hash",
+    )
+
+    return collection
+
+def get_xapity_pending_actions_collection() -> Collection:
+    """
+    Contiene acciones preparadas por Xapity que requieren
+    confirmación explícita antes de producir un efecto externo.
+
+    En esta primera versión solamente puede existir una acción
+    pendiente activa por usuario y empresa.
+    """
+
+    collection = get_luca_db()[
+        "xapity_pending_actions"
+    ]
+
+    collection.create_index(
+        [
+            ("actionId", ASCENDING),
+        ],
+        unique=True,
+        name="uq_xapity_pending_action_id",
+    )
+
+    collection.create_index(
+        [
+            ("businessId", ASCENDING),
+            ("userId", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "status": "pending",
+        },
+        name=(
+            "uq_xapity_pending_action_user_business"
+        ),
+    )
+
+    collection.create_index(
+        [
+            ("businessId", ASCENDING),
+            ("userId", ASCENDING),
+            ("createdAt", DESCENDING),
+        ],
+        name=(
+            "idx_xapity_pending_actions_history"
+        ),
+    )
+
+    collection.create_index(
+        [
+            ("status", ASCENDING),
+            ("expiresAt", ASCENDING),
+        ],
+        name=(
+            "idx_xapity_pending_actions_expiration"
+        ),
+    )
+
+    collection.create_index(
+        [
+            ("actionType", ASCENDING),
+            ("createdAt", DESCENDING),
+        ],
+        name=(
+            "idx_xapity_pending_actions_type"
+        ),
     )
 
     return collection
@@ -553,6 +665,491 @@ def _extract_item_projection(
         },
     }
 
+def _validate_positive_int(
+    *,
+    value: int,
+    field_name: str,
+) -> None:
+    if (
+        isinstance(
+            value,
+            bool,
+        )
+        or not isinstance(
+            value,
+            int,
+        )
+    ):
+        raise TypeError(
+            f"{field_name} debe ser un entero."
+        )
+
+    if value <= 0:
+        raise ValueError(
+            f"{field_name} debe ser mayor que cero."
+        )
+
+
+def _validate_non_empty_string(
+    *,
+    value: str,
+    field_name: str,
+) -> str:
+    if not isinstance(
+        value,
+        str,
+    ):
+        raise TypeError(
+            f"{field_name} debe ser un string."
+        )
+
+    normalized = value.strip()
+
+    if not normalized:
+        raise ValueError(
+            f"{field_name} no puede estar vacío."
+        )
+
+    return normalized
+
+def create_pending_action(
+    *,
+    business_id: int,
+    user_id: int,
+    action_type: str,
+    payload: dict[str, Any],
+    expires_in_minutes: int = 15,
+    original_question: str | None = None,
+) -> dict[str, Any]:
+    """
+    Crea una acción pendiente de confirmación.
+
+    Reglas:
+
+    - solamente puede existir una acción pending
+      por usuario + empresa;
+    - una nueva acción cancela cualquier pending anterior;
+    - la acción expira después del período configurado;
+    - payload contiene la información exacta que será
+      utilizada posteriormente para ejecutar la acción.
+
+    La pregunta original se conserva únicamente para
+    auditoría. No debe utilizarse para reconstruir
+    posteriormente la ejecución.
+    """
+
+    _validate_positive_int(
+        value=business_id,
+        field_name="business_id",
+    )
+
+    _validate_positive_int(
+        value=user_id,
+        field_name="user_id",
+    )
+
+    resolved_action_type = (
+        _validate_non_empty_string(
+            value=action_type,
+            field_name="action_type",
+        )
+    )
+
+    if not isinstance(
+        payload,
+        dict,
+    ):
+        raise TypeError(
+            "payload debe ser un diccionario."
+        )
+
+    if (
+        isinstance(
+            expires_in_minutes,
+            bool,
+        )
+        or not isinstance(
+            expires_in_minutes,
+            int,
+        )
+    ):
+        raise TypeError(
+            "expires_in_minutes debe ser un entero."
+        )
+
+    if expires_in_minutes <= 0:
+        raise ValueError(
+            "expires_in_minutes debe ser mayor que cero."
+        )
+
+    if (
+        original_question is not None
+        and not isinstance(
+            original_question,
+            str,
+        )
+    ):
+        raise TypeError(
+            "original_question debe ser string o None."
+        )
+
+    collection = (
+        get_xapity_pending_actions_collection()
+    )
+
+    now = utc_now()
+
+    expires_at = (
+        now
+        + timedelta(
+            minutes=expires_in_minutes
+        )
+    )
+
+    # --------------------------------------------------
+    # Cancelar cualquier acción pendiente anterior
+    # --------------------------------------------------
+
+    collection.update_many(
+        {
+            "businessId": business_id,
+            "userId": user_id,
+            "status": "pending",
+        },
+        {
+            "$set": {
+                "status": "cancelled",
+                "cancelledAt": now,
+                "updatedAt": now,
+                "cancellationReason": (
+                    "replaced_by_new_action"
+                ),
+            }
+        },
+    )
+
+    action_id = str(
+        uuid4()
+    )
+
+    document = {
+        "actionId": action_id,
+        "businessId": business_id,
+        "userId": user_id,
+        "actionType": (
+            resolved_action_type
+        ),
+        "status": "pending",
+        "payload": dict(
+            payload
+        ),
+        "originalQuestion": (
+            original_question
+        ),
+        "requiresConfirmation": True,
+        "createdAt": now,
+        "updatedAt": now,
+        "expiresAt": expires_at,
+        "confirmedAt": None,
+        "cancelledAt": None,
+        "executedAt": None,
+        "cancellationReason": None,
+    }
+
+    result = (
+        collection.insert_one(
+            document
+        )
+    )
+
+    return {
+        "actionId": action_id,
+        "mongoId": str(
+            result.inserted_id
+        ),
+        "businessId": business_id,
+        "userId": user_id,
+        "actionType": (
+            resolved_action_type
+        ),
+        "status": "pending",
+        "createdAt": now,
+        "expiresAt": expires_at,
+    }
+
+def find_pending_action(
+    *,
+    business_id: int,
+    user_id: int,
+) -> dict[str, Any] | None:
+    """
+    Obtiene la acción pendiente vigente para
+    un usuario y empresa.
+
+    Antes de consultar, marca como expired cualquier
+    acción cuyo tiempo de confirmación haya vencido.
+    """
+
+    _validate_positive_int(
+        value=business_id,
+        field_name="business_id",
+    )
+
+    _validate_positive_int(
+        value=user_id,
+        field_name="user_id",
+    )
+
+    collection = (
+        get_xapity_pending_actions_collection()
+    )
+
+    now = utc_now()
+
+    collection.update_many(
+        {
+            "businessId": business_id,
+            "userId": user_id,
+            "status": "pending",
+            "expiresAt": {
+                "$lte": now,
+            },
+        },
+        {
+            "$set": {
+                "status": "expired",
+                "updatedAt": now,
+                "expiredAt": now,
+            }
+        },
+    )
+
+    return collection.find_one(
+        {
+            "businessId": business_id,
+            "userId": user_id,
+            "status": "pending",
+            "expiresAt": {
+                "$gt": now,
+            },
+        },
+        sort=[
+            (
+                "createdAt",
+                DESCENDING,
+            ),
+        ],
+    )
+
+def confirm_pending_action(
+    *,
+    business_id: int,
+    user_id: int,
+    action_id: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Confirma atómicamente una acción pendiente vigente.
+
+    Solamente una acción con status=pending y no expirada
+    puede convertirse en confirmed.
+    """
+
+    _validate_positive_int(
+        value=business_id,
+        field_name="business_id",
+    )
+
+    _validate_positive_int(
+        value=user_id,
+        field_name="user_id",
+    )
+
+    collection = (
+        get_xapity_pending_actions_collection()
+    )
+
+    now = utc_now()
+
+    # Primero expirar cualquier pendiente vencida.
+
+    collection.update_many(
+        {
+            "businessId": business_id,
+            "userId": user_id,
+            "status": "pending",
+            "expiresAt": {
+                "$lte": now,
+            },
+        },
+        {
+            "$set": {
+                "status": "expired",
+                "updatedAt": now,
+                "expiredAt": now,
+            }
+        },
+    )
+
+    query: dict[str, Any] = {
+        "businessId": business_id,
+        "userId": user_id,
+        "status": "pending",
+        "expiresAt": {
+            "$gt": now,
+        },
+    }
+
+    if action_id is not None:
+        resolved_action_id = (
+            _validate_non_empty_string(
+                value=action_id,
+                field_name="action_id",
+            )
+        )
+
+        query["actionId"] = (
+            resolved_action_id
+        )
+
+    return collection.find_one_and_update(
+        query,
+        {
+            "$set": {
+                "status": "confirmed",
+                "confirmedAt": now,
+                "updatedAt": now,
+            }
+        },
+        return_document=(
+            ReturnDocument.AFTER
+        ),
+    )
+
+def cancel_pending_action(
+    *,
+    business_id: int,
+    user_id: int,
+    action_id: str | None = None,
+    reason: str = "user_cancelled",
+) -> dict[str, Any] | None:
+    """
+    Cancela una acción pendiente.
+    """
+
+    _validate_positive_int(
+        value=business_id,
+        field_name="business_id",
+    )
+
+    _validate_positive_int(
+        value=user_id,
+        field_name="user_id",
+    )
+
+    resolved_reason = (
+        _validate_non_empty_string(
+            value=reason,
+            field_name="reason",
+        )
+    )
+
+    collection = (
+        get_xapity_pending_actions_collection()
+    )
+
+    now = utc_now()
+
+    query: dict[str, Any] = {
+        "businessId": business_id,
+        "userId": user_id,
+        "status": "pending",
+    }
+
+    if action_id is not None:
+        query["actionId"] = (
+            _validate_non_empty_string(
+                value=action_id,
+                field_name="action_id",
+            )
+        )
+
+    return collection.find_one_and_update(
+        query,
+        {
+            "$set": {
+                "status": "cancelled",
+                "cancelledAt": now,
+                "updatedAt": now,
+                "cancellationReason": (
+                    resolved_reason
+                ),
+            }
+        },
+        return_document=(
+            ReturnDocument.AFTER
+        ),
+    )
+
+def expire_pending_actions(
+    *,
+    business_id: int | None = None,
+    user_id: int | None = None,
+) -> int:
+    """
+    Marca como expired acciones pendientes cuyo
+    tiempo de confirmación ya venció.
+
+    Puede utilizarse de forma global o acotada.
+    """
+
+    collection = (
+        get_xapity_pending_actions_collection()
+    )
+
+    now = utc_now()
+
+    query: dict[str, Any] = {
+        "status": "pending",
+        "expiresAt": {
+            "$lte": now,
+        },
+    }
+
+    if business_id is not None:
+        _validate_positive_int(
+            value=business_id,
+            field_name="business_id",
+        )
+
+        query["businessId"] = (
+            business_id
+        )
+
+    if user_id is not None:
+        _validate_positive_int(
+            value=user_id,
+            field_name="user_id",
+        )
+
+        query["userId"] = (
+            user_id
+        )
+
+    result = collection.update_many(
+        query,
+        {
+            "$set": {
+                "status": "expired",
+                "expiredAt": now,
+                "updatedAt": now,
+            }
+        },
+    )
+
+    return int(
+        result.modified_count
+    )
+
 
 # ---------------------------------------------------------------------------
 # Consultas
@@ -616,6 +1213,54 @@ def find_luca_sales_item_history(
                 "sourceKey": source_key,
             }
         ).sort("version", ASCENDING)
+    )
+
+def find_luca_report(
+    *,
+    business_id: int,
+    report_type: str,
+    query_from: str,
+    query_to: str,
+) -> dict[str, Any] | None:
+    """
+    Obtiene un reporte específico por su alcance exacto.
+    """
+    collection = get_luca_reports_collection()
+
+    return collection.find_one(
+        {
+            "businessId": business_id,
+            "reportType": report_type,
+            "queryFrom": query_from,
+            "queryTo": query_to,
+        }
+    )
+
+
+def find_latest_luca_report(
+    *,
+    business_id: int,
+    report_type: str,
+) -> dict[str, Any] | None:
+    """
+    Obtiene el reporte más reciente disponible para una empresa
+    y tipo de reporte.
+
+    La fecha queryTo tiene prioridad para determinar cuál representa
+    el período más reciente.
+    """
+    collection = get_luca_reports_collection()
+
+    return collection.find_one(
+        {
+            "businessId": business_id,
+            "reportType": report_type,
+            "isActive": True,
+        },
+        sort=[
+            ("queryTo", DESCENDING),
+            ("updatedAt", DESCENDING),
+        ],
     )
 
 
@@ -989,6 +1634,214 @@ def insert_luca_sales_summary(
     result = collection.insert_one(document)
 
     return str(result.inserted_id)
+
+def persist_luca_report_snapshot(
+    *,
+    metadata: dict[str, Any],
+    report: dict[str, Any],
+    summary: dict[str, Any],
+    trace: dict[str, Any] | None = None,
+    requested_by: str | None = None,
+) -> dict[str, Any]:
+    """
+    Persiste el estado vigente de un reporte sincronizado desde Luca.
+
+    Metadata requerida:
+
+        businessId
+        reportType
+        queryFrom
+        queryTo
+
+    Comportamiento:
+
+    1. Construye el alcance lógico del reporte.
+    2. Calcula hash sobre el reporte normalizado.
+    3. Inserta el reporte si no existe.
+    4. Actualiza y aumenta versión si cambió.
+    5. Si no cambió, conserva versión y contenido.
+    6. Actualiza trazabilidad y lastSeenAt.
+
+    La clave lógica es:
+
+        businessId
+        + reportType
+        + queryFrom
+        + queryTo
+    """
+
+    business_id = int(
+        _require_metadata(
+            metadata,
+            "businessId",
+        )
+    )
+
+    report_type = str(
+        _require_metadata(
+            metadata,
+            "reportType",
+        )
+    )
+
+    query_from = str(
+        _require_metadata(
+            metadata,
+            "queryFrom",
+        )
+    )
+
+    query_to = str(
+        _require_metadata(
+            metadata,
+            "queryTo",
+        )
+    )
+
+    source = metadata.get(
+        "source",
+        DEFAULT_SOURCE,
+    )
+
+    endpoint = metadata.get(
+        "endpoint",
+        report_type,
+    )
+
+    collection = (
+        get_luca_reports_collection()
+    )
+
+    scope = {
+        "businessId": business_id,
+        "reportType": report_type,
+        "queryFrom": query_from,
+        "queryTo": query_to,
+    }
+
+    now = utc_now()
+
+    content_hash = calculate_hash(
+        report
+    )
+
+    existing = collection.find_one(
+        scope,
+        {
+            "contentHash": 1,
+            "version": 1,
+            "firstSeenAt": 1,
+        },
+    )
+
+    previous_content_hash = (
+        existing.get("contentHash")
+        if existing is not None
+        else None
+    )
+
+    changed = (
+        existing is None
+        or previous_content_hash
+        != content_hash
+    )
+
+    if existing is None:
+        version = 1
+        change_type = "inserted"
+
+    elif changed:
+        version = (
+            int(
+                existing.get(
+                    "version",
+                    1,
+                )
+            )
+            + 1
+        )
+
+        change_type = "updated"
+
+    else:
+        version = int(
+            existing.get(
+                "version",
+                1,
+            )
+        )
+
+        change_type = "unchanged"
+
+    document = {
+        **scope,
+        "source": source,
+        "endpoint": endpoint,
+        "contentHash": content_hash,
+        "previousContentHash": (
+            previous_content_hash
+        ),
+        "version": version,
+        "report": report,
+        "summary": summary,
+        "metadata": metadata,
+        "trace": trace or {},
+        "requestedBy": requested_by,
+        "isActive": True,
+        "lastSeenAt": now,
+        "updatedAt": now,
+    }
+
+    update_document: dict[str, Any] = {
+        "$set": document,
+        "$setOnInsert": {
+            "firstSeenAt": now,
+            "createdAt": now,
+        },
+    }
+
+    result = collection.update_one(
+        scope,
+        update_document,
+        upsert=True,
+    )
+
+    return {
+        "businessId": business_id,
+        "reportType": report_type,
+        "queryFrom": query_from,
+        "queryTo": query_to,
+        "contentHash": content_hash,
+        "previousContentHash": (
+            previous_content_hash
+        ),
+        "version": version,
+        "hasChanges": changed,
+        "changeType": change_type,
+        "inserted": (
+            existing is None
+        ),
+        "updated": (
+            existing is not None
+            and changed
+        ),
+        "unchanged": (
+            existing is not None
+            and not changed
+        ),
+        "mongoId": (
+            str(result.upserted_id)
+            if result.upserted_id
+            is not None
+            else (
+                str(existing["_id"])
+                if existing
+                and existing.get("_id")
+                is not None
+                else None
+            )
+        ),
+    }
 
 
 def insert_luca_report_metadata(
