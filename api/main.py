@@ -136,10 +136,15 @@ from schemas.luca_sales import (
     LucaSalesChatRequest,
     LucaSalesChatResponse,
 )
+from schemas.luca_chat import (
+    LucaChatRequest,
+    LucaChatResponse,
+)
 
 from luca.sales_agent import (
     ask_sales_agent,
 )
+from luca.xapity_agent import ask_xapity
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
@@ -817,6 +822,98 @@ def xapity_luca_sales_chat_endpoint(
                 "message": (
                     "No fue posible procesar la consulta "
                     "comercial."
+                ),
+                "request_id": request_id,
+            },
+        ) from exc
+
+# ============================================================
+# XAPITY LUCA — GLOBAL AGENT
+# ============================================================
+
+
+@app.post(
+    "/xapity-luca/chat",
+    response_model=LucaChatResponse,
+)
+def xapity_luca_chat_endpoint(
+    req: LucaChatRequest,
+    x_request_id: Optional[str] = Header(default=None),
+):
+    """
+    Agente global de Xapity.
+
+    Flujo:
+
+        request HTTP
+        -> XapityAgent
+            -> ConversationAgent
+            -> SalesAgent
+            -> ReportsAgent
+            -> fallback global
+        -> respuesta estructurada
+
+    Routing actual:
+
+    1. ConversationAgent intenta resolver interacciones generales.
+    2. Si no resuelve, XapityAgent delega a SalesAgent.
+    3. Si SalesAgent no reconoce la consulta, delega a ReportsAgent.
+    4. Si ningún agente reconoce la consulta, XapityAgent
+       retorna un fallback global.
+
+    MVP:
+    - El businessId se recibe desde el body.
+    - ConversationAgent no requiere businessId.
+    - SalesAgent utiliza businessId para acceder a datos comerciales.
+    - ReportsAgent utiliza businessId para consultar snapshots
+      sincronizados en MongoDB.
+    - queryFrom/queryTo permiten solicitar un período explícito
+      para reportes cuando corresponda.
+    - No requiere autenticación todavía.
+    - El routing actual es determinista.
+    """
+
+    request_id = (
+        str(x_request_id).strip()
+        if x_request_id
+        else str(uuid.uuid4())
+    )
+
+    try:
+        result = ask_xapity(
+            question=req.question,
+            business_id=req.business_id,
+            year=req.year,
+            month=req.month,
+            query_from=req.query_from,
+            query_to=req.query_to,
+            limit=req.limit,
+            raise_errors=True,
+        )
+
+        return {
+            "requestId": request_id,
+            **result,
+        }
+
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "xapity_luca_invalid_request",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "xapity_luca_internal_error",
+                "message": (
+                    "No fue posible procesar la consulta "
+                    "en Xapity."
                 ),
                 "request_id": request_id,
             },
