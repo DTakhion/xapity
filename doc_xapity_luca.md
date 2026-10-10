@@ -210,13 +210,63 @@ sales_intents.py
 ```
 
 ``` text
-
+                         PREGUNTA
+                            │
+                            ▼
+                  ROUTER DETERMINISTA
+                            │
+                 ┌──────────┴──────────┐
+                 │                     │
+              conocida               UNKNOWN
+                 │                     │
+                 ▼                     ▼
+              handler               OLLAMA
+                                       │
+                         ┌─────────────┼─────────────┐
+                         │             │             │
+                      conocida      dynamic       unknown
+                         │             │             │
+                         ▼             ▼             ▼
+                      handler       ??????        rechazo
 ```
 
+
+``` bash
+python3 -m luca.sales_agent \
+  --business-id 70 \
+  --question "¿Cuántos clientes tengo?" \
+  --raise-errors
+```
 
 ``` text
-
+Pregunta
+"¿Cuántos clientes tengo?"
+        ↓
+router determinista
+        ↓
+UNKNOWN
+        ↓
+Ollama
+        ↓
+ollama_dynamic_query
+        ↓
+dynamic planner
+        ↓
+elige sales_overview
+        ↓
+tool determinista
+        ↓
+Mongo / luca_sales_items
+        ↓
+uniqueCustomers = 150
+        ↓
+semántica Xapity
+        ↓
+Ollama sintetiza
+        ↓
+"hay 150 clientes únicos"
 ```
+
 
 
 

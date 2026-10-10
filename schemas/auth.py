@@ -36,19 +36,45 @@ class AuthLoginRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
 
 
+# class AuthUserResponse(BaseModel):
+#     userId: str
+#     businessId: str
+#     name: str
+#     email: EmailStr
+#     phone: Optional[str] = None
+#     organizationName: str
+#     role: UserRole
+#     isActive: bool
+#     isDeleted: bool
+#     createdAt: datetime
+#     updatedAt: datetime
+#     _id: Optional[str] = None
+
+
 class AuthUserResponse(BaseModel):
+    # Global identity
     userId: str
-    businessId: str
     name: str
     email: EmailStr
     phone: Optional[str] = None
-    organizationName: str
-    role: UserRole
+
+    # Organizational context (legacy admin/staff)
+    businessId: Optional[str] = None
+    organizationName: Optional[str] = None
+    role: Optional[UserRole] = None
+
+    # Visitor identity attributes
+    rut: Optional[str] = None
+    emergencyPhone: Optional[str] = None
+
+    # Account status
     isActive: bool
     isDeleted: bool
+
+    # Audit timestamps
     createdAt: datetime
     updatedAt: datetime
-    _id: Optional[str] = None
+
 
 
 class AuthRegisterVerifyResponse(BaseModel):
@@ -86,6 +112,7 @@ class AuthResetPasswordResponse(BaseModel):
 class AuthInviteUserRequest(BaseModel):
     email: EmailStr
     role: UserRole = Field(default="user")
+    venueIds: Optional[list[str]] = None
 
 
 class AuthInviteUserResponse(BaseModel):
@@ -93,6 +120,7 @@ class AuthInviteUserResponse(BaseModel):
     message: str
     email: EmailStr
     role: UserRole
+    venueIds: Optional[list[str]] = None
 
 class AuthAcceptInvitationRequest(BaseModel):
     token: str = Field(..., min_length=20)
@@ -103,3 +131,11 @@ class AuthAcceptInvitationRequest(BaseModel):
 
 class AuthAcceptInvitationResponse(BaseModel):
     user: AuthUserResponse
+
+
+class AuthAdminRegisterRequest(AuthRegisterRequest):
+    adminProvisioningToken: str = Field(
+        ...,
+        min_length=32,
+        max_length=256,
+    )

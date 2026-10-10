@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient, ReturnDocument
 from pymongo.collection import Collection
 from pymongo.database import Database
-from pymongo.errors import PyMongoError
+from pymongo.errors import PyMongoError, DuplicateKeyError
 
 load_dotenv()
 
@@ -25,6 +25,17 @@ PENDING_REGISTRATIONS_COLLECTION = os.getenv(
     "pending_registrations",
 )
 
+
+# ============================================================
+# XAPITY ACCESS — GLOBAL VISITOR REGISTRATIONS
+# ============================================================
+
+VISITOR_PENDING_REGISTRATIONS_COLLECTION = os.getenv(
+    "VISITOR_PENDING_REGISTRATIONS_COLLECTION",
+    "visitor_pending_registrations",
+)
+
+
 MAF_RAG_QUERY_LOGS_COLLECTION = os.getenv(
     "MAF_RAG_QUERY_LOGS_COLLECTION",
     "maf_rag_query_logs",
@@ -38,6 +49,34 @@ PASSWORD_RESET_CODES_COLLECTION = os.getenv(
 USER_INVITATIONS_COLLECTION = os.getenv(
     "USER_INVITATIONS_COLLECTION",
     "user_invitations",
+)
+
+
+# ============================================================
+# XAPITY ACCESS — ADMIN PROVISIONING
+# ============================================================
+
+ADMIN_PROVISIONING_TOKENS_COLLECTION = os.getenv(
+    "ADMIN_PROVISIONING_TOKENS_COLLECTION",
+    "admin_provisioning_tokens",
+)
+
+# ============================================================
+# XAPITY ACCESS — VENUES
+# ============================================================
+
+VENUES_COLLECTION = os.getenv(
+    "VENUES_COLLECTION",
+    "venues",
+)
+
+# ============================================================
+# XAPITY ACCESS — VENUE MEMBERSHIPS
+# ============================================================
+
+VENUE_MEMBERSHIPS_COLLECTION = os.getenv(
+    "VENUE_MEMBERSHIPS_COLLECTION",
+    "venue_memberships",
 )
 
 _client: Optional[MongoClient] = None
@@ -98,6 +137,35 @@ def get_pending_registrations_collection() -> Collection:
     db = get_database()
     return db[PENDING_REGISTRATIONS_COLLECTION]
 
+
+def get_visitor_pending_registrations_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for
+    autonomous global visitor registrations.
+    """
+    db = get_database()
+    return db[VISITOR_PENDING_REGISTRATIONS_COLLECTION]
+
+
+def initialize_visitor_pending_registrations_storage() -> None:
+    """
+    Creates indexes for visitor registration requests.
+    """
+    try:
+        collection = get_visitor_pending_registrations_collection()
+
+        collection.create_index(
+            "email",
+            unique=True,
+            name="ux_visitor_pending_email",
+        )
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error initializing visitor registration storage."
+        ) from exc
+
+
 def get_password_reset_codes_collection() -> Collection:
     """
     Returns the MongoDB collection used for password reset codes.
@@ -111,6 +179,31 @@ def get_user_invitations_collection() -> Collection:
     """
     db = get_database()
     return db[USER_INVITATIONS_COLLECTION]
+
+
+def get_admin_provisioning_tokens_collection() -> Collection:
+    """
+    Returns the collection used for controlled
+    administrator provisioning.
+    """
+    db = get_database()
+    return db[ADMIN_PROVISIONING_TOKENS_COLLECTION]
+
+def get_venues_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for Xapity venues.
+    """
+    db = get_database()
+    return db[VENUES_COLLECTION]
+
+def get_venue_memberships_collection() -> Collection:
+    """
+    Returns the MongoDB collection used for
+    Xapity venue memberships.
+    """
+    db = get_database()
+    return db[VENUE_MEMBERSHIPS_COLLECTION]
+
 
 def get_maf_rag_query_logs_collection() -> Collection:
     """
@@ -533,24 +626,78 @@ def soft_delete_appointment_by_appointment_id(
     except PyMongoError as exc:
         raise RuntimeError("Error soft deleting appointment by appointmentId.") from exc
 
+
+
+# ============================================================
+# XAPITY ACCESS — GLOBAL USER IDENTITY INDEXES
+# ============================================================
+
+def initialize_global_users_storage() -> None:
+    """
+    Creates unique indexes for global Xapity identities.
+
+    Run only after auditing existing users for duplicates.
+    """
+    try:
+        collection = get_users_collection()
+
+        collection.create_index(
+            "userId",
+            unique=True,
+            name="ux_global_users_user_id",
+        )
+
+        collection.create_index(
+            "email",
+            unique=True,
+            name="ux_global_users_email",
+        )
+
+        collection.create_index(
+            "rut",
+            unique=True,
+            partialFilterExpression={
+                "rut": {"$type": "string"},
+            },
+            name="ux_global_users_rut",
+        )
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error initializing global users storage."
+        ) from exc
+
+
 def insert_user(user_document: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Inserts a user document into MongoDB and returns the inserted document.
+    Inserts a user document into MongoDB.
+
+    Preserves DuplicateKeyError so the service layer
+    can handle identity conflicts explicitly.
     """
     try:
         collection = get_users_collection()
 
         result = collection.insert_one(user_document)
 
-        inserted_document = collection.find_one({"_id": result.inserted_id})
+        inserted_document = collection.find_one({
+            "_id": result.inserted_id,
+        })
+
         if not inserted_document:
-            raise RuntimeError("User was inserted but could not be retrieved.")
+            raise RuntimeError(
+                "User was inserted but could not be retrieved."
+            )
 
         return serialize_mongo_document(inserted_document)
 
-    except PyMongoError as exc:
-        raise RuntimeError("Error inserting user into MongoDB.") from exc
+    except DuplicateKeyError:
+        raise
 
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error inserting user into MongoDB."
+        ) from exc
 
 def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     """
@@ -981,3 +1128,648 @@ def mark_user_invitation_used(
 
     except PyMongoError as exc:
         raise RuntimeError("Error marking user invitation as used.") from exc
+
+
+# ============================================================
+# XAPITY ACCESS — ADMIN PROVISIONING TOKENS
+# ============================================================
+
+def initialize_admin_provisioning_storage() -> None:
+    """
+    Creates indexes for administrator provisioning tokens.
+    """
+    try:
+        collection = get_admin_provisioning_tokens_collection()
+
+        collection.create_index(
+            "tokenHash",
+            unique=True,
+        )
+
+        collection.create_index(
+            "email",
+        )
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error initializing admin provisioning storage."
+        ) from exc
+
+
+def insert_admin_provisioning_token(
+    token_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Stores an administrator provisioning authorization.
+
+    The document must contain a tokenHash, not a raw token.
+    """
+    try:
+        collection = get_admin_provisioning_tokens_collection()
+
+        result = collection.insert_one(token_document)
+
+        document = collection.find_one(
+            {"_id": result.inserted_id}
+        )
+
+        if not document:
+            raise RuntimeError(
+                "Admin provisioning token could not be retrieved."
+            )
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error inserting admin provisioning token."
+        ) from exc
+
+
+def get_admin_provisioning_token(
+    token_hash: str,
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a valid, unused administrator authorization.
+    """
+    try:
+        collection = get_admin_provisioning_tokens_collection()
+
+        document = collection.find_one({
+            "tokenHash": token_hash,
+            "email": email.strip().lower(),
+            "usedAt": None,
+            "expiresAt": {
+                "$gt": datetime.now(timezone.utc),
+            },
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving admin provisioning token."
+        ) from exc
+
+
+def mark_admin_provisioning_token_used(
+    token_hash: str,
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Atomically marks a valid provisioning token as used.
+    """
+    try:
+        collection = get_admin_provisioning_tokens_collection()
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "tokenHash": token_hash,
+                "email": email.strip().lower(),
+                "usedAt": None,
+                "expiresAt": {"$gt": now},
+            },
+            {
+                "$set": {
+                    "usedAt": now,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error consuming admin provisioning token."
+        ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — VENUES PERSISTENCE
+# ============================================================
+
+
+def initialize_venues_storage() -> None:
+    """
+    Creates MongoDB indexes for venues.
+    """
+    try:
+        collection = get_venues_collection()
+
+        collection.create_index(
+            "venueId",
+            unique=True,
+        )
+
+        collection.create_index(
+            [
+                ("businessId", 1),
+                ("isDeleted", 1),
+                ("createdAt", -1),
+            ]
+        )
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error initializing venues storage."
+        ) from exc
+
+
+def insert_venue(
+    venue_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Inserts a venue document into MongoDB.
+    """
+    try:
+        collection = get_venues_collection()
+
+        result = collection.insert_one(venue_document)
+
+        document = collection.find_one(
+            {"_id": result.inserted_id}
+        )
+
+        if not document:
+            raise RuntimeError(
+                "Venue was inserted but could not be retrieved."
+            )
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error inserting venue into MongoDB."
+        ) from exc
+
+
+def get_venues_by_business_id(
+    business_id: str,
+    *,
+    include_deleted: bool = False,
+    only_active: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves venues belonging to one organization.
+    """
+    try:
+        collection = get_venues_collection()
+
+        query: Dict[str, Any] = {
+            "businessId": business_id,
+        }
+
+        if not include_deleted:
+            query["isDeleted"] = False
+
+        if only_active is not None:
+            query["isActive"] = only_active
+
+        documents = collection.find(query).sort(
+            "createdAt",
+            -1,
+        )
+
+        return [
+            serialize_mongo_document(doc)
+            for doc in documents
+        ]
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving venues by businessId."
+        ) from exc
+
+
+def get_venue_by_venue_id(
+    venue_id: str,
+    business_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a non-deleted venue within its organization.
+
+    The businessId condition prevents cross-organization
+    access at the persistence layer.
+    """
+    try:
+        collection = get_venues_collection()
+
+        document = collection.find_one({
+            "venueId": venue_id,
+            "businessId": business_id,
+            "isDeleted": False,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving venue by venueId."
+        ) from exc
+
+
+def update_venue_by_venue_id(
+    venue_id: str,
+    business_id: str,
+    update_fields: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates a non-deleted venue within its organization.
+
+    Only permitted fields should be supplied by
+    the venue service layer.
+    """
+    try:
+        collection = get_venues_collection()
+
+        document = collection.find_one_and_update(
+            {
+                "venueId": venue_id,
+                "businessId": business_id,
+                "isDeleted": False,
+            },
+            {
+                "$set": update_fields,
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error updating venue by venueId."
+        ) from exc
+
+
+def soft_delete_venue_by_venue_id(
+    venue_id: str,
+    business_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Soft deletes a venue within its organization.
+    """
+    try:
+        collection = get_venues_collection()
+
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "venueId": venue_id,
+                "businessId": business_id,
+                "isDeleted": False,
+            },
+            {
+                "$set": {
+                    "isDeleted": True,
+                    "isActive": False,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error soft deleting venue by venueId."
+        ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — VENUE MEMBERSHIPS PERSISTENCE
+# ============================================================
+
+
+def initialize_venue_memberships_storage() -> None:
+    """
+    Creates MongoDB indexes for venue memberships.
+
+    One membership document per venueId + userId.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        collection.create_index(
+            "membershipId",
+            unique=True,
+        )
+
+        collection.create_index(
+            [
+                ("venueId", 1),
+                ("userId", 1),
+            ],
+            unique=True,
+        )
+
+        collection.create_index(
+            [
+                ("businessId", 1),
+                ("venueId", 1),
+                ("isDeleted", 1),
+            ]
+        )
+
+        collection.create_index(
+            [
+                ("businessId", 1),
+                ("userId", 1),
+                ("isDeleted", 1),
+            ]
+        )
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error initializing venue memberships storage."
+        ) from exc
+
+
+def insert_venue_membership(
+    membership_document: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Inserts a new venue membership.
+
+    Unique indexes prevent duplicate venueId + userId
+    combinations, including logically deleted records.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        result = collection.insert_one(membership_document)
+
+        document = collection.find_one(
+            {"_id": result.inserted_id}
+        )
+
+        if not document:
+            raise RuntimeError(
+                "Venue membership was inserted but could not be retrieved."
+            )
+
+        return serialize_mongo_document(document)
+    
+    except DuplicateKeyError:
+        raise
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error inserting venue membership into MongoDB."
+        ) from exc
+
+
+def get_venue_membership_by_user_and_venue(
+    venue_id: str,
+    user_id: str,
+    business_id: str,
+    *,
+    include_deleted: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a user's membership within a venue.
+
+    Can include deleted memberships to support
+    controlled reactivation.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        query: Dict[str, Any] = {
+            "venueId": venue_id,
+            "userId": user_id,
+            "businessId": business_id,
+        }
+
+        if not include_deleted:
+            query["isDeleted"] = False
+
+        document = collection.find_one(query)
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving membership by user and venue."
+        ) from exc
+
+
+def get_venue_membership_by_membership_id(
+    membership_id: str,
+    venue_id: str,
+    business_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a non-deleted membership within
+    the specified venue and organization.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        document = collection.find_one({
+            "membershipId": membership_id,
+            "venueId": venue_id,
+            "businessId": business_id,
+            "isDeleted": False,
+        })
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving venue membership."
+        ) from exc
+
+
+def get_venue_memberships_by_venue_id(
+    venue_id: str,
+    business_id: str,
+    *,
+    include_deleted: bool = False,
+    only_active: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Lists memberships belonging to one venue
+    within its organization.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        query: Dict[str, Any] = {
+            "venueId": venue_id,
+            "businessId": business_id,
+        }
+
+        if not include_deleted:
+            query["isDeleted"] = False
+
+        if only_active is not None:
+            query["isActive"] = only_active
+
+        documents = collection.find(query).sort(
+            "createdAt",
+            -1,
+        )
+
+        return [
+            serialize_mongo_document(doc)
+            for doc in documents
+        ]
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving venue memberships."
+        ) from exc
+
+
+def get_venue_memberships_by_user_id(
+    user_id: str,
+    business_id: str,
+    *,
+    only_active: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Lists non-deleted venue memberships
+    belonging to one user within an organization.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        query: Dict[str, Any] = {
+            "userId": user_id,
+            "businessId": business_id,
+            "isDeleted": False,
+        }
+
+        if only_active is not None:
+            query["isActive"] = only_active
+
+        documents = collection.find(query).sort(
+            "createdAt",
+            -1,
+        )
+
+        return [
+            serialize_mongo_document(doc)
+            for doc in documents
+        ]
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error retrieving user venue memberships."
+        ) from exc
+
+
+def update_venue_membership_by_membership_id(
+    membership_id: str,
+    venue_id: str,
+    business_id: str,
+    update_fields: Dict[str, Any],
+    *,
+    include_deleted: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Updates a membership within its venue
+    and organization.
+
+    include_deleted=True permits controlled
+    reactivation by the service layer.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        query: Dict[str, Any] = {
+            "membershipId": membership_id,
+            "venueId": venue_id,
+            "businessId": business_id,
+        }
+
+        if not include_deleted:
+            query["isDeleted"] = False
+
+        document = collection.find_one_and_update(
+            query,
+            {
+                "$set": update_fields,
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error updating venue membership."
+        ) from exc
+
+
+def soft_delete_venue_membership_by_membership_id(
+    membership_id: str,
+    venue_id: str,
+    business_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Soft deletes a membership without removing
+    its historical record.
+    """
+    try:
+        collection = get_venue_memberships_collection()
+
+        now = datetime.now(timezone.utc)
+
+        document = collection.find_one_and_update(
+            {
+                "membershipId": membership_id,
+                "venueId": venue_id,
+                "businessId": business_id,
+                "isDeleted": False,
+            },
+            {
+                "$set": {
+                    "isDeleted": True,
+                    "isActive": False,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if not document:
+            return None
+
+        return serialize_mongo_document(document)
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error soft deleting venue membership."
+        ) from exc

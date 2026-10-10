@@ -35,6 +35,7 @@ from typing import Any, Callable, Mapping
 from luca.sales_intents import (
     SalesIntent,
     SalesOperation,
+    SalesDocumentType,
 )
 
 
@@ -94,11 +95,12 @@ class SalesResponseBuildResult:
 # VALIDACIONES
 # ==================================================
 
-
 def _validate_execution_result(
     execution_result: Mapping[str, Any],
     operation: SalesOperation,
+    intent: SalesIntent,
 ) -> None:
+
     """
     Valida la estructura mínima según la operación ejecutada.
     """
@@ -150,7 +152,25 @@ def _validate_execution_result(
         return
     
     if operation is SalesOperation.PROPOSE:
-        proposal = execution_result.get("proposal")
+        
+        if intent is SalesIntent.RECONCILIATION_PROPOSAL:
+            result = execution_result.get(
+                "proposal",
+                execution_result.get("result"),
+            )
+
+            if not isinstance(result, Mapping):
+                raise TypeError(
+                    "La propuesta de conciliación debe "
+                    "contener un mapping en 'proposal' o 'result'."
+                )
+
+            return
+        
+        proposal = execution_result.get(
+            "proposal",
+            execution_result.get("result", {}),
+        )
 
         if proposal is None:
             raise ValueError(
@@ -618,20 +638,17 @@ def build_sales_overview_response(
 # ==================================================
 
 
+
 def build_total_documents_response(
     query_result: Mapping[str, Any],
 ) -> str:
     """
-    Construye la respuesta para TOTAL_DOCUMENTS.
+    Construye la respuesta para TOTAL_DOCUMENTS,
+    respetando la categoría documental consultada.
     """
 
-    result = _get_result(
-        query_result
-    )
-
-    filters = _get_filters(
-        query_result
-    )
+    result = _get_result(query_result)
+    filters = _get_filters(query_result)
 
     period = format_period(
         year=filters.get("year"),
@@ -646,16 +663,55 @@ def build_total_documents_response(
         result.get("totalAmount")
     )
 
+    document_type = filters.get(
+        "documentType",
+        SalesDocumentType.ALL.value,
+    )
+
+    # ----------------------------------------------
+    # Vocabulario por categoría documental
+    # ----------------------------------------------
+
+    document_labels = {
+        SalesDocumentType.ALL.value: (
+            "documento de venta",
+            "documentos de venta",
+        ),
+        SalesDocumentType.INVOICE.value: (
+            "factura",
+            "facturas",
+        ),
+        SalesDocumentType.CREDIT_NOTE.value: (
+            "nota de crédito",
+            "notas de crédito",
+        ),
+    }
+
+    if document_type not in document_labels:
+        raise ValueError(
+            f"Tipo documental no soportado: {document_type}"
+        )
+
+    singular, plural = document_labels[document_type]
+
+    # ----------------------------------------------
+    # Sin resultados
+    # ----------------------------------------------
+
     if documents_count == 0:
         return (
-            f"No encontré documentos de venta"
+            f"No encontré {plural}"
             f"{period}."
         )
 
+    # ----------------------------------------------
+    # Respuesta
+    # ----------------------------------------------
+
     document_word = _singular_or_plural(
         documents_count,
-        singular="documento de venta",
-        plural="documentos de venta",
+        singular=singular,
+        plural=plural,
     )
 
     return (
@@ -665,6 +721,108 @@ def build_total_documents_response(
         f"por un monto total de "
         f"{format_clp(total_amount)}."
     )
+
+
+# ==================================================
+# MONTO TOTAL DE VENTAS
+# ==================================================
+
+
+def build_total_sales_amount_response(
+    query_result: Mapping[str, Any],
+) -> str:
+    """
+    Construye la respuesta QUERY para TOTAL_SALES_AMOUNT.
+
+    Presenta las ventas documentadas:
+    facturas menos notas de crédito, sin documentos
+    anulados y utilizando montos con IVA incluido.
+    """
+
+    result = _get_result(query_result)
+    filters = _get_filters(query_result)
+
+    period = format_period(
+        year=filters.get("year"),
+        month=filters.get("month"),
+    )
+
+    total_amount = _safe_float(
+        result.get("totalAmount")
+    )
+
+    invoices_amount = _safe_float(
+        result.get("invoicesAmount")
+    )
+
+    credit_notes_amount = _safe_float(
+        result.get("creditNotesAmount")
+    )
+
+    invoices_count = _safe_int(
+        result.get("invoicesCount")
+    )
+
+    credit_notes_count = _safe_int(
+        result.get("creditNotesCount")
+    )
+
+    # ----------------------------------------------
+    # Sin documentos
+    # ----------------------------------------------
+
+    if invoices_count == 0 and credit_notes_count == 0:
+        return (
+            f"No encontré ventas documentadas"
+            f"{period}."
+        )
+
+    # ----------------------------------------------
+    # Respuesta principal
+    # ----------------------------------------------
+
+    parts = [
+        (
+            f"Tus ventas documentadas{period} "
+            f"alcanzan {format_clp(total_amount)} "
+            f"(IVA incluido)."
+        )
+    ]
+
+    # ----------------------------------------------
+    # Desglose documental
+    # ----------------------------------------------
+
+    if invoices_count > 0:
+        invoice_word = _singular_or_plural(
+            invoices_count,
+            singular="factura",
+            plural="facturas",
+        )
+
+        parts.append(
+            f"Se registraron "
+            f"{format_number(invoices_count)} "
+            f"{invoice_word} por "
+            f"{format_clp(invoices_amount)}."
+        )
+
+    if credit_notes_count > 0:
+        note_word = _singular_or_plural(
+            credit_notes_count,
+            singular="nota de crédito",
+            plural="notas de crédito",
+        )
+
+        parts.append(
+            f"Se descontaron "
+            f"{format_number(credit_notes_count)} "
+            f"{note_word} por "
+            f"{format_clp(credit_notes_amount)}."
+        )
+
+    return " ".join(parts)
+
 
 # ==================================================
 # TOTAL POR COBRAR
@@ -822,6 +980,132 @@ def build_receivable_documents_response(
             f"de los "
             f"{format_number(documents_count)} "
             f"documentos pendientes."
+        )
+
+    return " ".join(parts)
+
+# ==================================================
+# CLIENTES NO CONCILIADOS — CONSULTA
+# ==================================================
+
+
+def build_unreconciled_customers_response(
+    query_result: Mapping[str, Any],
+) -> str:
+    """
+    Construye la respuesta QUERY para UNRECONCILED_CUSTOMERS.
+    """
+
+    result = _get_result(
+        query_result
+    )
+
+    filters = _get_filters(
+        query_result
+    )
+
+    period = format_period(
+        year=filters.get("year"),
+        month=filters.get("month"),
+    )
+
+    customers_count = _safe_int(
+        result.get("customersCount")
+    )
+
+    returned_customers_count = _safe_int(
+        result.get("returnedCustomersCount")
+    )
+
+    documents_count = _safe_int(
+        result.get("documentsCount")
+    )
+
+    total_amount = _safe_float(
+        result.get("totalAmount")
+    )
+
+    customers = result.get(
+        "customers",
+        [],
+    )
+
+    if customers_count == 0:
+        return (
+            f"No encontré clientes con documentos "
+            f"sin conciliar{period}."
+        )
+
+    customer_word = _singular_or_plural(
+        customers_count,
+        singular="cliente",
+        plural="clientes",
+    )
+
+    document_word = _singular_or_plural(
+        documents_count,
+        singular="documento sin conciliar",
+        plural="documentos sin conciliar",
+    )
+
+    parts = [
+        (
+            f"Tienes {format_number(customers_count)} "
+            f"{customer_word} con documentos sin conciliar"
+            f"{period}, por un total de "
+            f"{format_clp(total_amount)} en "
+            f"{format_number(documents_count)} "
+            f"{document_word}."
+        )
+    ]
+
+    if isinstance(customers, list) and customers:
+        details: list[str] = []
+
+        for customer in customers[:5]:
+            customer_name = (
+                customer.get("customerName")
+                or customer.get("customerRut")
+                or "cliente sin identificar"
+            )
+
+            amount = _safe_float(
+                customer.get("totalAmount")
+            )
+
+            customer_documents_count = _safe_int(
+                customer.get("documentsCount")
+            )
+
+            customer_document_word = _singular_or_plural(
+                customer_documents_count,
+                singular="documento",
+                plural="documentos",
+            )
+
+            details.append(
+                f"{customer_name}: "
+                f"{format_clp(amount)} en "
+                f"{format_number(customer_documents_count)} "
+                f"{customer_document_word}"
+            )
+
+        parts.append(
+            "Los principales son: "
+            + "; ".join(details)
+            + "."
+        )
+
+    if (
+        returned_customers_count > 0
+        and returned_customers_count < customers_count
+    ):
+        parts.append(
+            f"Estoy mostrando "
+            f"{format_number(returned_customers_count)} "
+            f"de los "
+            f"{format_number(customers_count)} "
+            f"clientes."
         )
 
     return " ".join(parts)
@@ -2059,6 +2343,112 @@ def build_sales_trend_proposal_response(
         "de presentarla."
     )
 
+
+# ==================================================
+# CONCILIACIÓN XAPITY — PROPUESTA
+# ==================================================
+
+
+def build_reconciliation_proposal_response(
+    execution_result: Mapping[str, Any],
+) -> str:
+    """
+    Presenta las propuestas de conciliación de Luca.
+
+    Solo informa candidatos. No confirma pagos,
+    no concilia y no modifica documentos.
+    """
+
+    proposal = _get_proposal(execution_result)
+
+    # Admitimos el resultado directamente o dentro
+    # del sobre HTTP devuelto por Luca.
+    result = proposal.get("result", proposal)
+
+    if not isinstance(result, Mapping):
+        return (
+            "No pude interpretar las propuestas "
+            "de conciliación recibidas desde Luca."
+        )
+
+    proposals = result.get("proposals", [])
+
+    if not isinstance(proposals, list) or not proposals:
+        return (
+            "No encontré coincidencias suficientes para "
+            "proponer conciliaciones bancarias. "
+            "Los documentos permanecen sin cambios."
+        )
+
+    count = len(proposals)
+
+    parts = [
+        (
+            f"Encontré {format_number(count)} "
+            f"{'propuesta' if count == 1 else 'propuestas'} "
+            "de conciliación bancaria para tu revisión."
+        )
+    ]
+
+    for item in proposals[:5]:
+        if not isinstance(item, Mapping):
+            continue
+
+        document = item.get("document", {})
+        movement = item.get("movement", {})
+
+        if not isinstance(document, Mapping):
+            document = {}
+
+        if not isinstance(movement, Mapping):
+            movement = {}
+
+        folio = (
+            document.get("folio")
+            or item.get("folio")
+        )
+
+        amount = (
+            document.get("amount")
+            or document.get("montoTotal")
+            or item.get("amount")
+        )
+
+        payer = (
+            movement.get("payerName")
+            or movement.get("description")
+            or item.get("payerName")
+        )
+
+        detail = (
+            f"Factura folio {folio}"
+            if folio
+            else "Documento identificado"
+        )
+
+        if amount is not None:
+            detail += f", por {format_clp(amount)}"
+
+        if payer:
+            detail += f", con posible abono de {payer}"
+
+        parts.append(detail + ".")
+
+    if count > 5:
+        parts.append(
+            f"Se muestran 5 de las "
+            f"{format_number(count)} propuestas."
+        )
+
+    parts.append(
+        "Estas coincidencias son propuestas, no pagos "
+        "confirmados. Debes revisar y aprobar cada "
+        "conciliación antes de aplicarla en Luca."
+    )
+
+    return "\n".join(parts)
+
+
 # ==================================================
 # REGISTRO DE CONSTRUCTORES
 # ==================================================
@@ -2077,16 +2467,33 @@ RESPONSE_BUILDERS: dict[
         SalesOperation.QUERY,
         SalesIntent.TOTAL_DOCUMENTS,
     ): build_total_documents_response,
+        
+    (
+        SalesOperation.QUERY,
+        SalesIntent.TOTAL_SALES_AMOUNT,
+    ): build_total_sales_amount_response,
 
     (
         SalesOperation.QUERY,
         SalesIntent.TOTAL_RECEIVABLE,
     ): build_total_receivable_response,
     
-        (
+    (
         SalesOperation.QUERY,
         SalesIntent.RECEIVABLE_DOCUMENTS,
     ): build_receivable_documents_response,
+    
+    (
+        SalesOperation.QUERY,
+        SalesIntent.UNRECONCILED_CUSTOMERS,
+    ): build_unreconciled_customers_response,
+    
+    
+    (
+        SalesOperation.PROPOSE,
+        SalesIntent.RECONCILIATION_PROPOSAL,
+    ): build_reconciliation_proposal_response,
+
 
     (
         SalesOperation.EXPLAIN,
@@ -2200,6 +2607,7 @@ class SalesResponseBuilder:
         _validate_execution_result(
             execution_result,
             operation,
+            intent,
         )
 
         builder = self._builders.get(

@@ -41,13 +41,22 @@ from typing import Any, Callable
 
 from pymongo.collection import Collection
 
+#from luca.sales_intent_router import route_sales_intent
 
-from luca.sales_intent_router import route_sales_intent
+from luca.sales_hybrid_router import (
+    route_hybrid_sales_intent,
+)
+
+from luca.sales_dynamic_planner import (
+    execute_dynamic_sales_query,
+)
+
 from luca.sales_intents import (
     IntentResult,
     SalesIntent,
     SalesOperation,
 )
+
 from luca.sales_query_service import (
     get_cancelled_documents,
     get_credit_notes,
@@ -56,7 +65,17 @@ from luca.sales_query_service import (
     get_sales_trend,
     get_sales_overview,
     get_total_documents,
+    get_total_sales_amount,  # NUEVO
     get_total_receivable,
+)
+
+
+from luca.sales_reconciliation_service import (
+    get_unreconciled_customers,
+)
+
+from luca.sales_reconciliation_proposal_service import (
+    propose_customer_reconciliation,
 )
 
 from luca.sales_response_builder import (
@@ -147,6 +166,8 @@ class SalesAgentResponse:
 QUERY_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
     SalesIntent.SALES_OVERVIEW: get_sales_overview,
     SalesIntent.TOTAL_DOCUMENTS: get_total_documents,
+    SalesIntent.TOTAL_SALES_AMOUNT: get_total_sales_amount,  # NUEVO
+    SalesIntent.UNRECONCILED_CUSTOMERS: get_unreconciled_customers,
     SalesIntent.RECEIVABLE_DOCUMENTS: get_receivable_documents,
     SalesIntent.TOTAL_RECEIVABLE: get_total_receivable,
     SalesIntent.CREDIT_NOTES: get_credit_notes,
@@ -154,6 +175,7 @@ QUERY_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
     SalesIntent.MONTHLY_SALES: get_monthly_sales,
     SalesIntent.SALES_TREND: get_sales_trend,
 }
+
 
 EXPLAIN_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
     SalesIntent.MONTHLY_SALES: explain_monthly_sales,
@@ -164,6 +186,7 @@ EXPLAIN_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
 PROPOSE_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
     SalesIntent.SALES_TREND: propose_sales_trend,
     SalesIntent.RECEIVABLE_DOCUMENTS: propose_receivable_documents,
+    SalesIntent.RECONCILIATION_PROPOSAL: propose_customer_reconciliation,
 }
 
 EXECUTE_HANDLERS: dict[SalesIntent, SalesQueryHandler] = {
@@ -316,10 +339,40 @@ def _build_handler_kwargs(
     operation: SalesOperation,
     query_parameters: dict[str, Any],
     collection: Collection | None,
+    entities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Construye únicamente los argumentos aceptados por cada handler.
     """
+    
+    
+    if (
+        intent is SalesIntent.RECONCILIATION_PROPOSAL
+        and operation is SalesOperation.PROPOSE
+    ):
+        kwargs: dict[str, Any] = {
+            "business_id": query_parameters["business_id"],
+            "year": query_parameters["year"],
+            "month": query_parameters["month"],
+        }
+
+        if collection is not None:
+            kwargs["collection"] = collection
+
+        # Cliente identificado por el router.
+        entities = entities or {}
+
+        customer_rut = entities.get("customer_rut")
+        customer_name = entities.get("customer_name")
+
+        if customer_rut:
+            kwargs["customer_rut"] = customer_rut
+
+        if customer_name:
+            kwargs["customer_name"] = customer_name
+
+        return kwargs
+
 
     kwargs: dict[str, Any] = {
         "business_id": query_parameters[
@@ -331,11 +384,29 @@ def _build_handler_kwargs(
 
     if collection is not None:
         kwargs["collection"] = collection
+    
+    
+    # --------------------------------------------------
+    # TOTAL_DOCUMENTS — filtro documental
+    # --------------------------------------------------
+
+    if (
+        operation is SalesOperation.QUERY
+        and intent is SalesIntent.TOTAL_DOCUMENTS
+    ):
+        entities = entities or {}
+
+        kwargs["document_type"] = entities.get(
+            "document_type",
+            "all",
+        )
+
 
     query_intents_with_limit = {
         SalesIntent.CREDIT_NOTES,
         SalesIntent.CANCELLED_DOCUMENTS,
         SalesIntent.RECEIVABLE_DOCUMENTS,
+        SalesIntent.UNRECONCILED_CUSTOMERS,
     }
 
     if (
@@ -511,7 +582,7 @@ class SalesAgent:
         try:
             _validate_request(request)
 
-            intent_result = route_sales_intent(
+            intent_result = route_hybrid_sales_intent(
                 request.question
             )
 
@@ -520,6 +591,83 @@ class SalesAgent:
             ) * 1000
 
             if intent_result.is_unknown:
+                if (
+                    intent_result.matched_rule
+                    == "ollama_dynamic_query"
+                ):
+                    query_parameters = (
+                        _resolve_query_parameters(
+                            request=request,
+                            intent_result=intent_result,
+                        )
+                    )
+
+                    dynamic_result = (
+                        execute_dynamic_sales_query(
+                            question=request.question,
+                            business_id=request.business_id,
+                            year=query_parameters["year"],
+                            month=query_parameters["month"],
+                            collection=self._collection,
+                        )
+                    )
+
+                    if dynamic_result is not None:
+                        elapsed_ms = (
+                            time.perf_counter() - started_at
+                        ) * 1000
+
+                        return SalesAgentResponse(
+                            status="answered",
+                            answer=dynamic_result.answer,
+                            intent=SalesIntent.UNKNOWN.value,
+                            confidence=intent_result.confidence,
+                            entities={
+                                **intent_result.entities,
+                                "year": query_parameters["year"],
+                                "month": query_parameters["month"],
+                            },
+                            data=dynamic_result.tool_result.get(
+                                "result"
+                            ),
+                            trace={
+                                "matchedRule": (
+                                    intent_result.matched_rule
+                                ),
+                                "operation": (
+                                    intent_result.operation.value
+                                ),
+                                "executionType": (
+                                    dynamic_result.tool_result.get(
+                                        "queryType"
+                                    )
+                                ),
+                                "source": (
+                                    dynamic_result.tool_result.get(
+                                        "metadata",
+                                        {},
+                                    ).get("source")
+                                ),
+                                "generatedAt": (
+                                    dynamic_result.tool_result.get(
+                                        "metadata",
+                                        {},
+                                    ).get("generatedAt")
+                                ),
+                                "planner": "dynamic",
+                                "selectedTool": (
+                                    dynamic_result.tool_name
+                                ),
+                                "plan": dynamic_result.plan,
+                                "classificationSource": "ollama",
+                                "deterministic": False,
+                                "elapsedMs": round(
+                                    elapsed_ms,
+                                    3,
+                                ),
+                            },
+                        )
+
                 return _unknown_response(
                     intent_result=intent_result,
                     elapsed_ms=round(
@@ -555,6 +703,7 @@ class SalesAgent:
                 operation=intent_result.operation,
                 query_parameters=query_parameters,
                 collection=self._collection,
+                entities=intent_result.entities,
             )
 
             execution_result = handler(
@@ -618,6 +767,13 @@ class SalesAgent:
                     ),
                     "responseBuilder": (
                         response_build_result.builder
+                    ),
+                    "classificationSource": (
+                        "ollama"
+                        if (intent_result.matched_rule or "").startswith(
+                            "ollama_"
+                        )
+                        else "deterministic"
                     ),
                     "deterministic": True,
                     "elapsedMs": round(

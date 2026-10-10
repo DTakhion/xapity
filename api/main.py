@@ -14,6 +14,50 @@ from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
 
 from schemas.subscription import OrganizationUsageResponse
 
+# ============================================================
+# XAPITY ACCESS — VENUES
+# ============================================================
+
+from schemas.venue import (
+    VenueCreateRequest,
+    VenueUpdateRequest,
+    VenueResponse,
+    VenuesListResponse,
+)
+
+from services.venue_service import (
+    create_venue,
+    list_venues,
+    get_venue,
+    update_venue,
+    delete_venue,
+)
+
+# ============================================================
+# XAPITY ACCESS — VENUE MEMBERSHIPS
+# ============================================================
+
+from schemas.venue_membership import (
+    VenueMembershipCreateRequest,
+    VenueMembershipUpdateRequest,
+    VenueMembershipResponse,
+    VenueMembershipsListResponse,
+)
+
+from services.venue_membership_service import (
+    VenueMembershipConflictError,
+    create_venue_membership,
+    list_venue_memberships,
+    get_venue_membership,
+    update_venue_membership,
+    delete_venue_membership,
+    list_my_venues,
+)
+
+from db.mongo_persistence import (
+    initialize_venue_memberships_storage,
+)
+
 #from services.staff_repo import create_staff, get_staff_list
 from services.staff_repo import (
     create_staff,
@@ -45,7 +89,7 @@ from utils.tags import generate_tags
 from services.service_repo import create_service, get_services_list, get_service, update_service, delete_service
 
 # Validación de duplicidad antes de insertar en Mongo.
-from db.mongo_persistence import service_name_exists, get_service_by_service_id
+from db.mongo_persistence import service_name_exists, get_service_by_service_id, initialize_venues_storage
 
 # NUEVO:
 # Se reutilizaron los schemas centrales del proyecto en vez de definir otros locales.
@@ -91,6 +135,7 @@ from schemas.xapity_chat import (
 
 from schemas.auth import (
     AuthRegisterRequest,
+    AuthAdminRegisterRequest,
     AuthRegisterStartResponse,
     AuthRegisterVerifyRequest,
     AuthRegisterVerifyResponse,
@@ -107,6 +152,28 @@ from schemas.auth import (
     AuthAcceptInvitationRequest,
     AuthAcceptInvitationResponse,
 )
+
+# ============================================================
+# XAPITY ACCESS — GLOBAL VISITOR AUTH
+# ============================================================
+
+from schemas.visitor_auth import (
+    VisitorRegisterStartRequest,
+    VisitorRegisterStartResponse,
+    VisitorRegisterVerifyRequest,
+    VisitorRegisterVerifyResponse,
+)
+
+from services.visitor_auth_service import (
+    start_visitor_registration,
+    verify_visitor_registration,
+)
+
+from db.mongo_persistence import (
+    initialize_global_users_storage,
+    initialize_visitor_pending_registrations_storage,
+)
+
 
 from services.auth_service import (
     register_user,
@@ -125,7 +192,7 @@ from services.auth_service import (
 from schemas.rag import RagAnswerRequest, RagAnswerResponse
 from rag.hybrid_service import answer_hybrid_question
 from db.mongo_persistence import insert_maf_rag_query_log
-
+from db.mongo_persistence import initialize_admin_provisioning_storage
 from jose import JWTError, jwt
 
 #from services.xapity_service import detect_xapity_intent, build_xapity_reply
@@ -164,12 +231,22 @@ app = FastAPI(title="xapity", version="0.1.0")
 
 # Migrate startup event to FastAPI lifespan API.
 # Current implementation is intentionally kept for compatibility.
+
 @app.on_event("startup")
 def startup_subscription_storage() -> None:
     """
-    Ensures subscription and usage-event indexes exist in MongoDB.
+    Initializes MongoDB indexes for subscriptions,
+    administrator provisioning, venues,
+    venue memberships and global identity.
     """
     initialize_subscription_storage()
+    initialize_admin_provisioning_storage()
+    initialize_venues_storage()
+    initialize_venue_memberships_storage()
+
+    # Xapity Access — Global Identity
+    initialize_global_users_storage()
+    initialize_visitor_pending_registrations_storage()
 
 #agregado por felix ortiz 16-03
 app.add_middleware(
@@ -239,17 +316,63 @@ def extract_bearer_token(authorization: Optional[str]) -> str:
     return parts[1]
 
 
-async def get_current_auth_user(authorization: Optional[str]) -> Dict[str, Any]:
+# async def get_current_auth_user(authorization: Optional[str]) -> Dict[str, Any]:
+#     """
+#     Valida JWT y retorna usuario actual desde Mongo.
+#     """
+#     token = extract_bearer_token(authorization)
+
+#     try:
+#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+#         user_id = payload.get("sub") or payload.get("userId")
+
+#         if not user_id:
+#             raise HTTPException(
+#                 status_code=401,
+#                 detail="Invalid token payload.",
+#             )
+
+#     except JWTError as exc:
+#         raise HTTPException(
+#             status_code=401,
+#             detail="Invalid or expired token.",
+#         ) from exc
+
+#     user = await get_user_by_id(user_id)
+
+#     if not user:
+#         raise HTTPException(
+#             status_code=401,
+#             detail="User not found or inactive.",
+#         )
+
+#     return user
+
+
+async def get_current_auth_user(
+    authorization: Optional[str],
+) -> Dict[str, Any]:
     """
-    Valida JWT y retorna usuario actual desde Mongo.
+    Validates the JWT and resolves the global identity.
+
+    Supports:
+    - Legacy organization users.
+    - Global visitors without businessId.
+
+    Does not grant organizational permissions.
     """
     token = extract_bearer_token(authorization)
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub") or payload.get("userId")
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+        )
 
-        if not user_id:
+        user_id = payload.get("sub")
+
+        if not isinstance(user_id, str) or not user_id.strip():
             raise HTTPException(
                 status_code=401,
                 detail="Invalid token payload.",
@@ -266,10 +389,32 @@ async def get_current_auth_user(authorization: Optional[str]) -> Dict[str, Any]:
     if not user:
         raise HTTPException(
             status_code=401,
-            detail="User not found or inactive.",
+            detail="User not found.",
+        )
+
+    if not user.get("isActive", True) or user.get("isDeleted", False):
+        raise HTTPException(
+            status_code=401,
+            detail="User account is inactive.",
         )
 
     return user
+
+# ============================================================
+# XAPITY ACCESS — AUTHENTICATED USER DEPENDENCY
+# ============================================================
+
+async def require_authenticated_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> Dict[str, Any]:
+    """
+    Resolves the authenticated user from a Bearer JWT.
+    """
+    authorization = (
+        f"{credentials.scheme} {credentials.credentials}"
+    )
+
+    return await get_current_auth_user(authorization)
 
 def get_email_domain(email: str) -> str:
     return email.strip().lower().split("@")[-1]
@@ -295,16 +440,120 @@ def assert_admin_user(user: Dict[str, Any]) -> None:
             detail="Solo usuarios admin pueden invitar nuevos usuarios.",
         )
 
-@app.post("/auth/register/start", response_model=AuthRegisterStartResponse)
-async def auth_register_start_endpoint(payload: AuthRegisterRequest):
-    """
-    Starts email-verified registration.
+# @app.post("/auth/register/start", response_model=AuthRegisterStartResponse)
+# async def auth_register_start_endpoint(payload: AuthRegisterRequest):
+#     """
+#     Starts email-verified registration.
 
-    This endpoint does NOT create the final user.
-    It creates a pending registration and sends a 6-digit code by email.
+#     This endpoint does NOT create the final user.
+#     It creates a pending registration and sends a 6-digit code by email.
+#     """
+#     try:
+#         business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+
+#         return await start_user_registration(
+#             payload=payload,
+#             business_id=business_id,
+#         )
+
+#     except ValueError as exc:
+#         raise HTTPException(
+#             status_code=400,
+#             detail=str(exc),
+#         ) from exc
+
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail="Internal error while starting registration.",
+#         ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — VISITOR REGISTRATION
+# ============================================================
+
+@app.post(
+    "/access/visitors/register/start",
+    response_model=VisitorRegisterStartResponse,
+    status_code=200,
+)
+
+async def visitor_register_start_endpoint(
+    payload: VisitorRegisterStartRequest,
+):
+    """
+    Starts autonomous global visitor registration.
+
+    No businessId or provisioning token required.
     """
     try:
-        business_id = MAF_BUSINESS_ID if is_maf_email(payload.email) else None
+        return await start_visitor_registration(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while starting visitor registration.",
+        ) from exc
+
+
+@app.post(
+    "/access/visitors/register/verify",
+    response_model=VisitorRegisterVerifyResponse,
+    status_code=201,
+)
+
+async def visitor_register_verify_endpoint(
+    payload: VisitorRegisterVerifyRequest,
+):
+    """
+    Verifies email and creates a global identity.
+
+    The visitor has no organizational permissions.
+    """
+    try:
+        user = await verify_visitor_registration(payload)
+
+        return {"user": user}
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while verifying visitor registration.",
+        ) from exc
+
+
+@app.post(
+    "/auth/register/start",
+    response_model=AuthRegisterStartResponse,
+)
+async def auth_register_start_endpoint(
+    payload: AuthAdminRegisterRequest,
+):
+    """
+    Starts a controlled administrator registration.
+
+    Requires an Xapity-issued provisioning token.
+    The final user is created only after email verification.
+    """
+    try:
+        business_id = (
+            MAF_BUSINESS_ID
+            if is_maf_email(payload.email)
+            else None
+        )
 
         return await start_user_registration(
             payload=payload,
@@ -540,6 +789,438 @@ async def auth_accept_invitation_endpoint(payload: AuthAcceptInvitationRequest):
             status_code=500,
             detail="Internal error while accepting invitation.",
         ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — VENUES API
+# ============================================================
+
+@app.post(
+    "/access/venues",
+    response_model=VenueResponse,
+    status_code=201,
+)
+async def create_venue_endpoint(
+    payload: VenueCreateRequest,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Creates a venue within the authenticated
+    administrator's organization.
+    """
+    try:
+        return create_venue(
+            payload=payload,
+            current_user=current_user,
+        )
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while creating venue.",
+        ) from exc
+
+
+@app.get(
+    "/access/venues",
+    response_model=VenuesListResponse,
+)
+async def list_venues_endpoint(
+    only_active: Optional[bool] = None,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Lists venues belonging to the authenticated
+    user's organization.
+    """
+    try:
+        venues = list_venues(
+            current_user=current_user,
+            only_active=only_active,
+        )
+
+        return {"venues": venues}
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while listing venues.",
+        ) from exc
+
+
+@app.get(
+    "/access/venues/{venue_id}",
+    response_model=VenueResponse,
+)
+async def get_venue_endpoint(
+    venue_id: str,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Retrieves a venue within the authenticated
+    user's organization.
+    """
+    try:
+        return get_venue(
+            venue_id=venue_id,
+            current_user=current_user,
+        )
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving venue.",
+        ) from exc
+
+
+@app.patch(
+    "/access/venues/{venue_id}",
+    response_model=VenueResponse,
+)
+async def update_venue_endpoint(
+    venue_id: str,
+    payload: VenueUpdateRequest,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Updates a venue within the authenticated
+    administrator's organization.
+    """
+    try:
+        return update_venue(
+            venue_id=venue_id,
+            payload=payload,
+            current_user=current_user,
+        )
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while updating venue.",
+        ) from exc
+
+
+@app.delete(
+    "/access/venues/{venue_id}",
+    response_model=VenueResponse,
+)
+async def delete_venue_endpoint(
+    venue_id: str,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Soft deletes a venue within the authenticated
+    administrator's organization.
+    """
+    try:
+        return delete_venue(
+            venue_id=venue_id,
+            current_user=current_user,
+        )
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while deleting venue.",
+        ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — VENUE MEMBERSHIPS API
+# ============================================================
+
+
+def handle_venue_membership_error(exc: Exception) -> None:
+    """
+    Maps membership service exceptions to HTTP responses.
+    """
+    if isinstance(exc, VenueMembershipConflictError):
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(exc, PermissionError):
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(exc, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(exc, LookupError):
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    raise HTTPException(
+        status_code=500,
+        detail="Internal error while processing venue membership.",
+    ) from exc
+
+
+# ============================================================
+# CREATE MEMBERSHIP
+# ============================================================
+
+
+@app.post(
+    "/access/venues/{venue_id}/memberships",
+    response_model=VenueMembershipResponse,
+    status_code=201,
+)
+async def create_venue_membership_endpoint(
+    venue_id: str,
+    payload: VenueMembershipCreateRequest,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Creates or reactivates a venue membership.
+    Administrator only.
+    """
+    try:
+        return create_venue_membership(
+            venue_id=venue_id,
+            payload=payload,
+            current_user=current_user,
+        )
+
+    except Exception as exc:
+        handle_venue_membership_error(exc)
+
+
+# ============================================================
+# LIST MEMBERSHIPS
+# ============================================================
+
+
+@app.get(
+    "/access/venues/{venue_id}/memberships",
+    response_model=VenueMembershipsListResponse,
+)
+async def list_venue_memberships_endpoint(
+    venue_id: str,
+    only_active: Optional[bool] = None,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Lists memberships belonging to a venue.
+    Administrator only.
+    """
+    try:
+        memberships = list_venue_memberships(
+            venue_id=venue_id,
+            current_user=current_user,
+            only_active=only_active,
+        )
+
+        return {"memberships": memberships}
+
+    except Exception as exc:
+        handle_venue_membership_error(exc)
+
+
+# ============================================================
+# GET MEMBERSHIP
+# ============================================================
+
+
+@app.get(
+    "/access/venues/{venue_id}/memberships/{membership_id}",
+    response_model=VenueMembershipResponse,
+)
+async def get_venue_membership_endpoint(
+    venue_id: str,
+    membership_id: str,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Retrieves one venue membership.
+    Administrator only.
+    """
+    try:
+        return get_venue_membership(
+            venue_id=venue_id,
+            membership_id=membership_id,
+            current_user=current_user,
+        )
+
+    except Exception as exc:
+        handle_venue_membership_error(exc)
+
+
+# ============================================================
+# UPDATE MEMBERSHIP
+# ============================================================
+
+
+@app.patch(
+    "/access/venues/{venue_id}/memberships/{membership_id}",
+    response_model=VenueMembershipResponse,
+)
+async def update_venue_membership_endpoint(
+    venue_id: str,
+    membership_id: str,
+    payload: VenueMembershipUpdateRequest,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Updates membership role or active status.
+    Administrator only.
+    """
+    try:
+        return update_venue_membership(
+            venue_id=venue_id,
+            membership_id=membership_id,
+            payload=payload,
+            current_user=current_user,
+        )
+
+    except Exception as exc:
+        handle_venue_membership_error(exc)
+
+
+# ============================================================
+# DELETE MEMBERSHIP
+# ============================================================
+
+
+@app.delete(
+    "/access/venues/{venue_id}/memberships/{membership_id}",
+    response_model=VenueMembershipResponse,
+)
+async def delete_venue_membership_endpoint(
+    venue_id: str,
+    membership_id: str,
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Soft deletes a venue membership.
+    Administrator only.
+    """
+    try:
+        return delete_venue_membership(
+            venue_id=venue_id,
+            membership_id=membership_id,
+            current_user=current_user,
+        )
+
+    except Exception as exc:
+        handle_venue_membership_error(exc)
+
+# ============================================================
+# MY ACCESSIBLE VENUES
+# ============================================================
+
+@app.get(
+    "/access/my/venues",
+    response_model=VenuesListResponse,
+)
+async def list_my_venues_endpoint(
+    current_user: Dict[str, Any] = Depends(
+        require_authenticated_user
+    ),
+):
+    """
+    Returns venues accessible to the authenticated user.
+
+    Admin: all active venues in the organization.
+    Staff: active venues with active memberships.
+    """
+    try:
+        venues = list_my_venues(
+            current_user=current_user,
+        )
+
+        return {"venues": venues}
+
+    except Exception as exc:
+        handle_venue_membership_error(exc)
 
 # ============================================================
 # XAPITY-MAF
