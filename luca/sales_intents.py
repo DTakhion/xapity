@@ -33,6 +33,52 @@ class SalesOperation(str, Enum):
     PROPOSE = "propose"
     EXECUTE = "execute"
 
+
+class SalesDocumentType(str, Enum):
+    """
+    Categorías comerciales de documentos de venta.
+
+    ALL:
+        Todos los documentos de venta.
+
+    INVOICE:
+        Facturas afectas y exentas.
+
+    CREDIT_NOTE:
+        Notas de crédito.
+    """
+
+    ALL = "all"
+    INVOICE = "invoice"
+    CREDIT_NOTE = "credit_note"
+
+
+class SalesDocumentCode(int, Enum):
+    """
+    Tipos de documentos tributarios electrónicos
+    considerados inicialmente por Xapity-Luca.
+    """
+
+    ELECTRONIC_INVOICE = 33
+    EXEMPT_ELECTRONIC_INVOICE = 34
+    ELECTRONIC_CREDIT_NOTE = 61
+
+
+DOCUMENT_CODES_BY_TYPE = {
+    SalesDocumentType.ALL: (
+        SalesDocumentCode.ELECTRONIC_INVOICE,
+        SalesDocumentCode.EXEMPT_ELECTRONIC_INVOICE,
+        SalesDocumentCode.ELECTRONIC_CREDIT_NOTE,
+    ),
+    SalesDocumentType.INVOICE: (
+        SalesDocumentCode.ELECTRONIC_INVOICE,
+        SalesDocumentCode.EXEMPT_ELECTRONIC_INVOICE,
+    ),
+    SalesDocumentType.CREDIT_NOTE: (
+        SalesDocumentCode.ELECTRONIC_CREDIT_NOTE,
+    ),
+}
+
 class SalesIntent(str, Enum):
     """
     Intenciones comerciales soportadas por el agente de ventas.
@@ -48,7 +94,7 @@ class SalesIntent(str, Enum):
     SALES_OVERVIEW = "sales_overview" # “Dame un resumen de mis ventas”
     TOTAL_DOCUMENTS = "total_documents" # ¿Cuántos documentos de venta tengo?
     TOTAL_SALES_AMOUNT = "total_sales_amount" # ¿Cuánto he vendido?
-    TOTAL_CUSTOMERS = "total_customers" # ¿Cuántos clientes tengo?
+    #TOTAL_CUSTOMERS = "total_customers" # ¿Cuántos clientes tengo?
 
     # ------------------------------------------------------------------
     # Cuentas por cobrar
@@ -56,6 +102,13 @@ class SalesIntent(str, Enum):
 
     TOTAL_RECEIVABLE = "total_receivable" # ¿Cuánto tengo por cobrar?
     RECEIVABLE_DOCUMENTS = "receivable_documents" # ¿Qué facturas tengo pendientes?
+    
+    # ------------------------------------------------------------------
+    # Conciliación comercial
+    # ------------------------------------------------------------------
+
+    UNRECONCILED_CUSTOMERS = "unreconciled_customers"  # ¿Qué clientes no tengo conciliados?
+    RECONCILIATION_PROPOSAL = "reconciliation_proposal"  # Proponer conciliaciones posibles
 
     # ------------------------------------------------------------------
     # Clientes
@@ -128,7 +181,9 @@ class IntentResult:
             "customer": "Frogmi",
             "limit": 10,
             "year": 2026,
-            "month": 1
+            "month": 1,
+            "document_type": "invoice",
+            "document_code": None,
         }
 
     matched_rule:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import uuid
 import random
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
@@ -19,6 +21,7 @@ from schemas.auth import (
     AuthResetPasswordRequest,
     AuthInviteUserRequest,
     AuthAcceptInvitationRequest,
+    AuthAdminRegisterRequest,
 )
 
 from db.mongo_persistence import (
@@ -37,6 +40,9 @@ from db.mongo_persistence import (
     insert_user_invitation,
     get_user_invitation_by_token,
     mark_user_invitation_used,
+    insert_admin_provisioning_token,
+    get_admin_provisioning_token,
+    mark_admin_provisioning_token_used,
 )
 
 from services.email_service import (
@@ -79,6 +85,10 @@ PASSWORD_RESET_MAX_ATTEMPTS = int(
 
 INVITATION_EXPIRE_HOURS = int(
     os.getenv("INVITATION_EXPIRE_HOURS", "48")
+)
+
+ADMIN_PROVISIONING_EXPIRE_HOURS = int(
+    os.getenv("ADMIN_PROVISIONING_EXPIRE_HOURS", "48")
 )
 
 FRONTEND_BASE_URL = os.getenv(
@@ -130,6 +140,80 @@ def verify_registration_code(plain_code: str, hashed_code: str) -> bool:
     Verifies a plain verification code against the stored hash.
     """
     return pwd_context.verify(plain_code, hashed_code)
+
+
+# ============================================================
+# XAPITY ACCESS — ADMIN PROVISIONING
+# ============================================================
+
+def hash_admin_provisioning_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_admin_provisioning_token(email: str) -> str:
+    """
+    Creates a one-use administrative authorization.
+
+    This function must only be called by a trusted
+    Xapity-controlled process, never by a public endpoint.
+    """
+    normalized_email = str(email).strip().lower()
+
+    if not normalized_email or "@" not in normalized_email:
+        raise ValueError("Correo de administrador inválido")
+
+    if get_user_by_email(normalized_email):
+        raise ValueError("El correo ya está registrado")
+
+    now = datetime.now(timezone.utc)
+    token = secrets.token_urlsafe(32)
+
+    token_doc = {
+        "provisioningId": str(uuid.uuid4()),
+        "tokenHash": hash_admin_provisioning_token(token),
+        "email": normalized_email,
+        "role": "admin",
+        "expiresAt": now + timedelta(
+            hours=ADMIN_PROVISIONING_EXPIRE_HOURS
+        ),
+        "usedAt": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    insert_admin_provisioning_token(token_doc)
+
+    # Return the raw token only to the trusted issuer.
+    return token
+
+
+def validate_admin_provisioning_token(
+    token: str,
+    email: str,
+) -> str:
+    """
+    Validates a provisioning token and returns its hash.
+    Does not consume the token.
+    """
+    normalized_email = str(email).strip().lower()
+
+    if not token:
+        raise ValueError("Se requiere autorización de Xapity")
+
+    token_hash = hash_admin_provisioning_token(token)
+
+    authorization = get_admin_provisioning_token(
+        token_hash,
+        normalized_email,
+    )
+
+    if not authorization or authorization.get("role") != "admin":
+        raise ValueError(
+            "Autorización administrativa inválida o expirada"
+        )
+
+    return token_hash
+
 
 # ============================================================
 # HELPERS PASSWORD RESET CODE
@@ -219,7 +303,7 @@ def create_access_token(data: dict) -> str:
 #     return inserted_user
 
 async def start_user_registration(
-    payload: AuthRegisterRequest,
+    payload: AuthAdminRegisterRequest,
     business_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -228,6 +312,14 @@ async def start_user_registration(
     This does NOT create the final user yet.
     It stores a pending registration and sends a verification code by email.
     """
+    
+    normalized_email = str(payload.email).strip().lower()
+
+    provisioning_token_hash = validate_admin_provisioning_token(
+        payload.adminProvisioningToken,
+        normalized_email,
+    )
+    
     existing_user = get_user_by_email(payload.email)
 
     if existing_user:
@@ -242,11 +334,13 @@ async def start_user_registration(
         "pendingRegistrationId": str(uuid.uuid4()),
         "businessId": business_id or str(uuid.uuid4()),
         "name": payload.name,
-        "email": str(payload.email).strip().lower(),
+        "email": normalized_email,
         "passwordHash": hash_password(payload.password),
         "phone": payload.phone,
         "organizationName": payload.organizationName,
-        "role": payload.role,
+        "role": "admin",
+        "registrationType": "admin_provisioning",
+        "adminProvisioningTokenHash": provisioning_token_hash,
         "verificationCodeHash": hash_registration_code(code),
         "expiresAt": expires_at,
         "attempts": 0,
@@ -380,6 +474,26 @@ async def verify_user_registration(
     if not verify_registration_code(code, verification_code_hash):
         increment_pending_registration_attempts(normalized_email)
         raise ValueError("Código de verificación inválido")
+    
+    if pending.get("registrationType") != "admin_provisioning":
+        raise ValueError("Registro administrativo no autorizado")
+
+    provisioning_token_hash = pending.get(
+        "adminProvisioningTokenHash"
+    )
+
+    if not provisioning_token_hash:
+        raise ValueError("Falta autorización administrativa")
+
+    authorization = get_admin_provisioning_token(
+        provisioning_token_hash,
+        normalized_email,
+    )
+
+    if not authorization or authorization.get("role") != "admin":
+        raise ValueError(
+            "Autorización administrativa inválida o expirada"
+        )
 
     user_doc = {
         "userId": str(uuid.uuid4()),
@@ -389,7 +503,7 @@ async def verify_user_registration(
         "passwordHash": pending["passwordHash"],
         "phone": pending.get("phone"),
         "organizationName": pending["organizationName"],
-        "role": pending["role"],
+        "role": "admin",
         "authProvider": "local",
         "isEmailVerified": True,
         "isActive": True,
@@ -397,6 +511,16 @@ async def verify_user_registration(
         "createdAt": now,
         "updatedAt": now,
     }
+    
+    consumed_authorization = mark_admin_provisioning_token_used(
+        provisioning_token_hash,
+        normalized_email,
+    )
+
+    if not consumed_authorization:
+        raise ValueError(
+            "La autorización administrativa ya fue utilizada o expiró"
+        )
 
     inserted_user = insert_user(user_doc)
 
@@ -686,11 +810,21 @@ async def reset_user_password(
 # LOGIN
 # ============================================================
 
+
 async def login_user(payload: AuthLoginRequest) -> Dict[str, Any]:
     """
-    Login con email + password.
+    Global Xapity login using email + password.
+
+    Supports:
+    - Legacy organization users (admin/staff).
+    - Global visitors without businessId.
+
+    Organizational authorization remains separate
+    from global identity authentication.
     """
-    user = get_user_by_email(payload.email)
+    normalized_email = str(payload.email).strip().lower()
+
+    user = get_user_by_email(normalized_email)
 
     if not user:
         raise ValueError("Credenciales inválidas")
@@ -706,16 +840,23 @@ async def login_user(payload: AuthLoginRequest) -> Dict[str, Any]:
     if not verify_password(payload.password, password_hash):
         raise ValueError("Credenciales inválidas")
 
+    # Global identity claims.
     token_data = {
         "sub": user["userId"],
         "userId": user["userId"],
-        "businessId": user["businessId"],
         "email": user["email"],
-        "role": user["role"],
     }
+
+    # Preserve legacy organizational claims when present.
+    if user.get("businessId") is not None:
+        token_data["businessId"] = user["businessId"]
+
+    if user.get("role") is not None:
+        token_data["role"] = user["role"]
 
     access_token = create_access_token(token_data)
 
+    # Never expose password hashes.
     user.pop("passwordHash", None)
 
     return {

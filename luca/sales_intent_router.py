@@ -31,8 +31,12 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import Callable, Pattern
 
-from luca.sales_intents import IntentResult, SalesIntent, SalesOperation
-
+from luca.sales_intents import (
+    IntentResult,
+    SalesIntent,
+    SalesOperation,
+    SalesDocumentType,
+)
 
 # ---------------------------------------------------------------------------
 # Tipos internos
@@ -387,7 +391,10 @@ def extract_relative_period(
             "este ano",
             "ano actual",
             "durante este ano",
+            "durante el ano",
+            "en lo que va del ano",
         )
+
     ):
         entities["year"] = now.year
 
@@ -545,6 +552,39 @@ def extract_common_entities(
     return entities
 
 
+def extract_total_documents_entities(
+    original_question: str,
+    normalized_question: str,
+) -> dict[str, object]:
+    """
+    Extrae los filtros para consultas de cantidad de documentos.
+    """
+
+    entities = extract_common_entities(
+        original_question,
+        normalized_question,
+    )
+
+    if re.search(
+        r"\bnotas?\s+(?:de\s+)?credito\b",
+        normalized_question,
+    ):
+        document_type = SalesDocumentType.CREDIT_NOTE
+
+    elif re.search(
+        r"\bfacturas?\b",
+        normalized_question,
+    ):
+        document_type = SalesDocumentType.INVOICE
+
+    else:
+        document_type = SalesDocumentType.ALL
+
+    entities["document_type"] = document_type.value
+
+    return entities
+
+
 def extract_top_customers_entities(
     original_question: str,
     normalized_question: str,
@@ -586,6 +626,49 @@ def extract_customer_detail_entities(
 
     if customer:
         entities["customer"] = customer
+
+    return entities
+
+def extract_reconciliation_proposal_entities(
+    original_question: str,
+    normalized_question: str,
+) -> dict[str, object]:
+    """
+    Extrae entidades para una propuesta de conciliación.
+
+    La razón social es opcional:
+    - si se identifica, la propuesta se limita a ese cliente;
+    - si no se identifica, el servicio podrá considerar todos los
+      clientes no conciliados.
+    """
+
+    entities = extract_common_entities(
+        original_question,
+        normalized_question,
+    )
+
+    patterns = (
+        r"\bconciliar\s+(?:a\s+)?(.+)$",
+        r"\bconciliemos\s+(?:a\s+)?(.+)$",
+        r"\bconciliaciones?\s+(?:para|de)\s+(.+)$",
+    )
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            normalized_question,
+        )
+
+        if not match:
+            continue
+
+        customer = clean_customer_candidate(
+            match.group(1)
+        )
+
+        if customer:
+            entities["customer"] = customer
+            break
 
     return entities
 
@@ -649,20 +732,45 @@ RULES: tuple[IntentRule, ...] = (
     # ------------------------------------------------------------------
     # Documentos específicos
     # ------------------------------------------------------------------
-
+        
     IntentRule(
-        name="credit_notes",
-        intent=SalesIntent.CREDIT_NOTES,
+        name="total_documents",
+        intent=SalesIntent.TOTAL_DOCUMENTS,
+        operation=SalesOperation.QUERY,
         patterns=compile_patterns(
-            r"\bnotas?\s+de\s+credito\b",
-            r"\bnota\s+credito\b",
-            r"\bdocumentos?\s+de\s+credito\b",
-            r"\bque\s+notas?\s+de\s+credito\s+tengo\b",
-            r"\bcuantas?\s+notas?\s+de\s+credito\s+tengo\b",
+            # Todos los documentos
+            r"\bcuantos?\s+documentos?\s+(?:de\s+venta\s+|comerciales?\s+)?(?:tengo|existen|hay)\b",
+            r"\bcuantos?\s+documentos?\s+de\s+venta\b",
+            r"\btotal\s+de\s+documentos\b",
+            r"\bnumero\s+de\s+documentos\b",
+
+            # Facturas
+            r"\bcuantas?\s+facturas?\s+(?:de\s+venta\s+)?(?:tengo|existen|hay)\b",
+            r"\btotal\s+de\s+facturas\b",
+            r"\bnumero\s+de\s+facturas\b",
+
+            # Notas de crédito
+            r"\bcuantas?\s+notas?\s+de\s+credito\s+(?:tengo|existen|hay)\b",
+            r"\btotal\s+de\s+notas?\s+de\s+credito\b",
+            r"\bnumero\s+de\s+notas?\s+de\s+credito\b",
         ),
         confidence=1.0,
-        extractor=extract_common_entities,
+        extractor=extract_total_documents_entities,
     ),
+
+    # IntentRule(
+    #     name="credit_notes",
+    #     intent=SalesIntent.CREDIT_NOTES,
+    #     patterns=compile_patterns(
+    #         r"\bnotas?\s+de\s+credito\b",
+    #         r"\bnota\s+credito\b",
+    #         r"\bdocumentos?\s+de\s+credito\b",
+    #         r"\bque\s+notas?\s+de\s+credito\s+tengo\b",
+    #         r"\bcuantas?\s+notas?\s+de\s+credito\s+tengo\b",
+    #     ),
+    #     confidence=1.0,
+    #     extractor=extract_common_entities,
+    # ),
 
     IntentRule(
         name="cancelled_documents",
@@ -810,6 +918,45 @@ RULES: tuple[IntentRule, ...] = (
         confidence=1.0,
         extractor=extract_common_entities,
     ),
+    
+    # ------------------------------------------------------------------
+    # Conciliación comercial
+    # ------------------------------------------------------------------
+
+    IntentRule(
+        name="reconciliation_proposal",
+        intent=SalesIntent.RECONCILIATION_PROPOSAL,
+        operation=SalesOperation.PROPOSE,
+        patterns=compile_patterns(
+            r"\bme\s+ayudas\s+a\s+conciliar\b",
+            r"\bpuedes\s+ayudarme\s+a\s+conciliar\b",
+            r"\bconciliemos\b",
+            r"\bpropon(?:er|me|es)\b.*\bconciliaciones?\b",
+            r"\bpropuestas?\s+de\s+conciliacion\b",
+            r"\bresuelve\s+(?:las\s+)?conciliaciones?\b",
+        ),
+        confidence=1.0,
+        extractor=extract_reconciliation_proposal_entities,
+    ),
+
+    IntentRule(
+        name="unreconciled_customers",
+        intent=SalesIntent.UNRECONCILED_CUSTOMERS,
+        operation=SalesOperation.QUERY,
+        patterns=compile_patterns(
+            r"\bque\s+clientes?\s+no\s+(?:tengo\s+)?conciliados?\b",
+            r"\bque\s+clientes?\s+(?:me\s+)?faltan\s+por\s+conciliar\b",
+            r"\bquienes?\s+(?:me\s+)?faltan\s+por\s+conciliar\b",
+            r"\ba\s+quien(?:es)?\s+no\s+(?:tengo\s+)?conciliado\b",
+            r"\bclientes?\s+sin\s+conciliar\b",
+            r"\bclientes?\s+no\s+conciliados?\b",
+            r"\bclientes?\s+pendientes?\s+de\s+conciliacion\b",
+            r"\bque\s+clientes?\s+(?:estan|tengo)\s+pendientes?\s+de\s+conciliacion\b",
+            r"\bque\s+(?:clientes?\s+)?(?:me\s+)?falta\s+conciliar\b",
+        ),
+        confidence=1.0,
+        extractor=extract_common_entities,
+    ),
 
     # ------------------------------------------------------------------
     # Cuentas por cobrar
@@ -936,18 +1083,18 @@ RULES: tuple[IntentRule, ...] = (
         extractor=extract_top_customers_entities,
     ),
 
-    IntentRule(
-        name="total_customers",
-        intent=SalesIntent.TOTAL_CUSTOMERS,
-        patterns=compile_patterns(
-            r"\bcuantos?\s+clientes?\s+(?:distintos\s+)?(?:tengo|existen|hay)\b",
-            r"\btotal\s+de\s+clientes\b",
-            r"\bnumero\s+de\s+clientes\b",
-            r"\bclientes?\s+unicos?\b",
-        ),
-        confidence=1.0,
-        extractor=extract_common_entities,
-    ),
+    # IntentRule(
+    #     name="total_customers",
+    #     intent=SalesIntent.TOTAL_CUSTOMERS,
+    #     patterns=compile_patterns(
+    #         r"\bcuantos?\s+clientes?\s+(?:distintos\s+)?(?:tengo|existen|hay)\b",
+    #         r"\btotal\s+de\s+clientes\b",
+    #         r"\bnumero\s+de\s+clientes\b",
+    #         r"\bclientes?\s+unicos?\b",
+    #     ),
+    #     confidence=1.0,
+    #     extractor=extract_common_entities,
+    # ),
 
     # ------------------------------------------------------------------
     # Tipos y estados
@@ -1070,6 +1217,30 @@ RULES: tuple[IntentRule, ...] = (
         confidence=1.0,
         extractor=extract_common_entities,
     ),
+    
+    # Totales y consultas por monto
+    
+    IntentRule(
+            name="total_sales_amount",
+            intent=SalesIntent.TOTAL_SALES_AMOUNT,
+            patterns=compile_patterns(
+                r"\bcuanto\s+he\s+vendido\b",
+                r"\bcuanto\s+vendi\b",
+                r"\bcuanto\s+vendimos\b",
+                r"\bcuanto\s+hemos\s+vendido\b",
+                r"\bmonto\s+total\s+de\s+ventas\b",
+                r"\btotal\s+vendido\b",
+                r"\btotal\s+de\s+ventas\b",
+                r"\bventa\s+total\b",
+                r"\bventas?\s+totales?\b",
+                r"\bmonto\s+vendido\b",
+                r"\bcuanto\s+dinero\s+representan\s+(?:las\s+)?ventas\b",
+            ),
+            confidence=1.0,
+            extractor=extract_common_entities,
+        ),
+    
+    # Desgloses mensuales
 
     IntentRule(
         name="monthly_sales",
@@ -1092,42 +1263,6 @@ RULES: tuple[IntentRule, ...] = (
     # ------------------------------------------------------------------
     # Totales y overview
     # ------------------------------------------------------------------
-
-    IntentRule(
-        name="total_sales_amount",
-        intent=SalesIntent.TOTAL_SALES_AMOUNT,
-        patterns=compile_patterns(
-            r"\bcuanto\s+he\s+vendido\b",
-            r"\bcuanto\s+vendi\b",
-            r"\bcuanto\s+vendimos\b",
-            r"\bcuanto\s+hemos\s+vendido\b",
-            r"\bmonto\s+total\s+de\s+ventas\b",
-            r"\btotal\s+vendido\b",
-            r"\btotal\s+de\s+ventas\b",
-            r"\bventa\s+total\b",
-            r"\bventas?\s+totales?\b",
-            r"\bmonto\s+vendido\b",
-            r"\bcuanto\s+dinero\s+representan\s+(?:las\s+)?ventas\b",
-        ),
-        confidence=1.0,
-        extractor=extract_common_entities,
-    ),
-
-    IntentRule(
-        name="total_documents",
-        intent=SalesIntent.TOTAL_DOCUMENTS,
-        patterns=compile_patterns(
-            r"\bcuantos?\s+documentos?\s+(?:tengo|existen|hay)\b",
-            r"\btotal\s+de\s+documentos\b",
-            r"\bnumero\s+de\s+documentos\b",
-            r"\bcuantas?\s+facturas?\s+(?:tengo|existen|hay)\b",
-            r"\btotal\s+de\s+facturas\b",
-            r"\bcuantos?\s+documentos?\s+de\s+venta\b",
-            r"\bcuantos?\s+documentos?\s+comerciales\b",
-        ),
-        confidence=1.0,
-        extractor=extract_common_entities,
-    ),
 
     IntentRule(
         name="sales_overview",
@@ -1259,6 +1394,9 @@ def route_sales_intent(
 
 if __name__ == "__main__":
     example_questions = (
+        "Dame un resumen general de las ventas.",
+        "¿Cuántos documentos de venta tengo?",
+        "¿Cuánto vendí el mes pasado?",
         "¿Cuánto dinero tengo por cobrar?",
         "Muéstrame las notas de crédito.",
         "¿Cuáles son mis 10 principales clientes?",
@@ -1267,9 +1405,7 @@ if __name__ == "__main__":
         "¿Cuál fue la factura de mayor monto?",
         "¿Qué documentos vencen esta semana?",
         "¿Cuántos clientes distintos existen?",
-        "Dame un resumen general de las ventas.",
         "Cuéntame una historia sobre contabilidad.",
-        "¿Cuánto vendí el mes pasado?",
         "¿Por qué vendí menos el mes pasado?", 
         "¿Por qué vendí menos en julio?", 
         "¿Qué pasó con las ventas del mes pasado?", 
@@ -1279,6 +1415,16 @@ if __name__ == "__main__":
         "¿Qué facturas tengo pendientes?",
         "¿Dónde se concentra lo que tengo pendiente por cobrar?",
         "¿Qué me propones hacer con las facturas pendientes?",
+        "¿Qué clientes no tengo conciliados?",
+        "¿A quién no tengo conciliado?",
+        "¿Quiénes me faltan por conciliar?",
+        "Muéstrame los clientes sin conciliar.",
+        "¿Me ayudas a conciliar?",
+        "Conciliemos.",
+        "Conciliemos a INVERSIONES E I G COMPANIA LIMITADA.",
+        "¿Puedes proponerme conciliaciones para INVERSIONES E I G COMPANIA LIMITADA?",
+        "¿Puedes proponerme conciliaciones?",
+        "Resuelve las conciliaciones.",
     )
 
     for example_question in example_questions:

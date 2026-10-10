@@ -14,6 +14,14 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 
 
+from luca.sales_intents import (
+    SalesDocumentType,
+    SalesDocumentCode,
+    DOCUMENT_CODES_BY_TYPE,
+)
+
+
+
 # ==================================================
 # ENV / MONGO
 # ==================================================
@@ -988,18 +996,26 @@ def get_sales_overview(
         },
     }
 
+
 def get_total_documents(
     *,
     business_id: int,
     year: int | None = None,
     month: int | None = None,
+    document_type: str = SalesDocumentType.ALL.value,
+    document_code: int | None = None,
     collection: Collection | None = None,
 ) -> dict[str, Any]:
     """
-    Responde:
-        ¿Cuántos documentos de venta tengo?
-        ¿Cuántas facturas tengo?
-        ¿Cuál es el total de documentos comerciales?
+    Cuenta documentos de venta según su categoría.
+
+    Categorías:
+        all         -> todos los documentos
+        invoice     -> códigos 33 y 34
+        credit_note -> código 61
+
+    document_code permite seleccionar un código
+    tributario específico dentro de la categoría.
     """
 
     context = _validate_context(
@@ -1008,15 +1024,73 @@ def get_total_documents(
         month=month,
     )
 
+    # ----------------------------------------------
+    # Validación de filtros documentales
+    # ----------------------------------------------
+
+    try:
+        selected_type = SalesDocumentType(document_type)
+    except ValueError as exc:
+        raise ValueError(
+            f"Tipo documental no soportado: {document_type}"
+        ) from exc
+
+    allowed_codes = {
+        int(code.value)
+        for code in DOCUMENT_CODES_BY_TYPE[selected_type]
+    }
+
+    if document_code is not None:
+        if (
+            isinstance(document_code, bool)
+            or not isinstance(document_code, int)
+            or document_code not in allowed_codes
+        ):
+            raise ValueError(
+                "Código documental incompatible "
+                "con la categoría seleccionada."
+            )
+
+    # ----------------------------------------------
+    # Carga de documentos
+    # ----------------------------------------------
+
     resolved_collection = (
         collection
-        or get_sales_items_collection()
+        if collection is not None
+        else get_sales_items_collection()
     )
 
     documents = _load_current_documents(
         collection=resolved_collection,
         context=context,
     )
+
+    # ----------------------------------------------
+    # Filtro por categoría
+    # ----------------------------------------------
+
+    if selected_type is not SalesDocumentType.ALL:
+        documents = [
+            document
+            for document in documents
+            if _extract_document_code(document) in allowed_codes
+        ]
+
+    # ----------------------------------------------
+    # Filtro por código específico
+    # ----------------------------------------------
+
+    if document_code is not None:
+        documents = [
+            document
+            for document in documents
+            if _extract_document_code(document) == document_code
+        ]
+
+    # ----------------------------------------------
+    # Resultado
+    # ----------------------------------------------
 
     total_amount = sum(
         _extract_amount(document)
@@ -1029,6 +1103,8 @@ def get_total_documents(
         "filters": {
             "year": context.year,
             "month": context.month,
+            "documentType": selected_type.value,
+            "documentCode": document_code,
         },
         "result": {
             "documentsCount": len(documents),
@@ -1043,6 +1119,118 @@ def get_total_documents(
         },
     }
 
+
+# ==================================================
+# CONSULTA: MONTO TOTAL DE VENTAS
+# ==================================================
+
+def get_total_sales_amount(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Responde:
+        ¿Cuánto he vendido?
+        ¿Cuánto vendí este mes?
+        ¿Cuánto vendí el mes pasado?
+        ¿Cuánto he vendido durante el año?
+
+    Criterio:
+        Facturas 33 y 34 menos notas de crédito 61.
+        Excluye documentos marcados como anulados.
+
+    Los montos corresponden al total documental,
+    no a ventas netas de IVA.
+    """
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        if collection is not None
+        else get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    invoice_codes = {
+        int(code.value)
+        for code in DOCUMENT_CODES_BY_TYPE[
+            SalesDocumentType.INVOICE
+        ]
+    }
+
+    valid_documents = [
+        document
+        for document in documents
+        if not _is_cancelled(document)
+    ]
+
+    invoices = [
+        document
+        for document in valid_documents
+        if _extract_document_code(document) in invoice_codes
+    ]
+
+    credit_notes = [
+        document
+        for document in valid_documents
+        if _is_credit_note(document)
+    ]
+
+    invoices_amount = sum(
+        _extract_amount(document)
+        for document in invoices
+    )
+
+    credit_notes_amount = sum(
+        abs(_extract_amount(document))
+        for document in credit_notes
+    )
+
+    total_sales_amount = (
+        invoices_amount - credit_notes_amount
+    )
+
+    return {
+        "queryType": "total_sales_amount",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+        },
+        "result": {
+            "totalAmount": total_sales_amount,
+            "invoicesAmount": invoices_amount,
+            "creditNotesAmount": credit_notes_amount,
+            "invoicesCount": len(invoices),
+            "creditNotesCount": len(credit_notes),
+            "documentsCount": (
+                len(invoices) + len(credit_notes)
+            ),
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+            "amountBasis": "gross_document_amount",
+            "calculation": (
+                "invoices_minus_credit_notes"
+            ),
+        },
+    }
 
 # ==================================================
 # CONSULTAS DETERMINISTAS BÁSICAS
