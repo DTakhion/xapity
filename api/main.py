@@ -14,6 +14,7 @@ from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
 
 from schemas.subscription import OrganizationUsageResponse
 
+
 # ============================================================
 # XAPITY ACCESS — VENUES
 # ============================================================
@@ -127,6 +128,8 @@ from services.subscription_service import (
     InvalidUsageEventStateError,
 )
 
+from services.visitor_auth_service import VisitorCooldownError
+
 from schemas.xapity_chat import (
     XapityChatRequest,
     XapityChatResponse,
@@ -216,9 +219,19 @@ from luca.xapity_agent import ask_xapity
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"   # xapity/.env
 load_dotenv(ENV_PATH)
 
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
+
+from services.rate_limit_service import (
+    check_rate_limit,
+    RateLimitExceeded,
+    RateLimitStorageError,
+)
+
+from db.mongo_persistence import (
+    initialize_rate_limits_storage,
+)
 
 #agregado por felix ortiz 16-03, esto es para permitir la comunicacion con front, evitando asi un error 405
 from fastapi.middleware.cors import CORSMiddleware
@@ -247,6 +260,10 @@ def startup_subscription_storage() -> None:
     # Xapity Access — Global Identity
     initialize_global_users_storage()
     initialize_visitor_pending_registrations_storage()
+    
+    # Xapity Access — Rate Limiting
+    initialize_rate_limits_storage()
+
 
 #agregado por felix ortiz 16-03
 app.add_middleware(
@@ -289,6 +306,128 @@ class GateRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+# ============================================================
+# XAPITY ACCESS — RATE LIMIT DEPENDENCIES
+# ============================================================
+
+import ipaddress
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Resolves client IP for direct Google Cloud Run ingress.
+
+    Expected X-Forwarded-For format:
+        client_ip, google_proxy_ip
+
+    If the caller supplied X-Forwarded-For:
+        spoofed_ip, client_ip, google_proxy_ip
+
+    The second-to-last entry is selected.
+
+    This function assumes Cloud Run's documented
+    proxy behavior and direct *.run.app ingress.
+    """
+
+    forwarded = request.headers.get("x-forwarded-for")
+
+    if not forwarded:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing client IP information.",
+        )
+
+    parts = [
+        value.strip()
+        for value in forwarded.split(",")
+    ]
+
+    if len(parts) < 2 or any(not value for value in parts):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid client IP information.",
+        )
+
+    try:
+        # Validate both the client and proxy entries.
+        client_ip = ipaddress.ip_address(parts[-2])
+        ipaddress.ip_address(parts[-1])
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid client IP information.",
+        ) from exc
+
+    return str(client_ip)
+
+
+def enforce_rate_limit(
+    *,
+    scope: str,
+    identifier: str,
+    limit: int,
+    window_seconds: int,
+) -> None:
+    """
+    Enforces a MongoDB-backed rate limit.
+
+    Converts service exceptions into HTTP responses.
+    """
+    try:
+        check_rate_limit(
+            scope=scope,
+            identifier=identifier,
+            limit=limit,
+            window_seconds=window_seconds,
+        )
+
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please try again later.",
+            headers={
+                "Retry-After": str(exc.retry_after),
+            },
+        ) from exc
+
+    except RateLimitStorageError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting service temporarily unavailable.",
+        ) from exc
+
+
+def enforce_auth_rate_limits(
+    *,
+    request: Request,
+    email: str,
+    scope: str,
+    ip_limit: int,
+    email_limit: int,
+    window_seconds: int,
+) -> None:
+    """
+    Applies independent IP and email rate limits.
+    """
+    client_ip = get_client_ip(request)
+
+    enforce_rate_limit(
+        scope=f"{scope}:ip",
+        identifier=client_ip,
+        limit=ip_limit,
+        window_seconds=window_seconds,
+    )
+
+    enforce_rate_limit(
+        scope=f"{scope}:email",
+        identifier=email.strip().lower(),
+        limit=email_limit,
+        window_seconds=window_seconds,
+    )
+
 
 # ============================================================
 # AUTH
@@ -473,22 +612,78 @@ def assert_admin_user(user: Dict[str, Any]) -> None:
 # XAPITY ACCESS — VISITOR REGISTRATION
 # ============================================================
 
+# @app.post(
+#     "/access/visitors/register/start",
+#     response_model=VisitorRegisterStartResponse,
+#     status_code=200,
+# )
+
+# async def visitor_register_start_endpoint(
+#     payload: VisitorRegisterStartRequest,
+# ):
+#     """
+#     Starts autonomous global visitor registration.
+
+#     No businessId or provisioning token required.
+#     """
+#     try:
+#         return await start_visitor_registration(payload)
+
+#     except ValueError as exc:
+#         raise HTTPException(
+#             status_code=400,
+#             detail=str(exc),
+#         ) from exc
+
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail="Internal error while starting visitor registration.",
+#         ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — VISITOR REGISTRATION
+# ============================================================
+
 @app.post(
     "/access/visitors/register/start",
     response_model=VisitorRegisterStartResponse,
     status_code=200,
 )
-
 async def visitor_register_start_endpoint(
     payload: VisitorRegisterStartRequest,
+    request: Request,
 ):
     """
     Starts autonomous global visitor registration.
 
+    Rate limiting:
+    - 10 requests/15 minutes per IP.
+    - 3 requests/15 minutes per email.
+
     No businessId or provisioning token required.
     """
+    enforce_auth_rate_limits(
+        request=request,
+        email=payload.email,
+        scope="visitor_register_start",
+        ip_limit=10,
+        email_limit=3,
+        window_seconds=900,
+    )
+
     try:
         return await start_visitor_registration(payload)
+    
+    except VisitorCooldownError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={
+                "Retry-After": str(exc.retry_after),
+            },
+        ) from exc
 
     except ValueError as exc:
         raise HTTPException(
@@ -501,7 +696,6 @@ async def visitor_register_start_endpoint(
             status_code=500,
             detail="Internal error while starting visitor registration.",
         ) from exc
-
 
 @app.post(
     "/access/visitors/register/verify",
@@ -605,16 +799,53 @@ async def auth_register_verify_endpoint(payload: AuthRegisterVerifyRequest):
         ) from exc
 
 
+# @app.post("/auth/login", response_model=AuthLoginResponse)
+# async def auth_login_endpoint(payload: AuthLoginRequest):
+#     """
+#     Login local con email + password.
+
+#     Retorna:
+#     - accessToken
+#     - tokenType
+#     - user
+#     """
+#     try:
+#         return await login_user(payload)
+
+#     except ValueError as exc:
+#         raise HTTPException(
+#             status_code=401,
+#             detail=str(exc),
+#         ) from exc
+
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail="Internal error while logging in.",
+#         ) from exc
+
+
 @app.post("/auth/login", response_model=AuthLoginResponse)
-async def auth_login_endpoint(payload: AuthLoginRequest):
+async def auth_login_endpoint(
+    payload: AuthLoginRequest,
+    request: Request,
+):
     """
     Login local con email + password.
 
-    Retorna:
-    - accessToken
-    - tokenType
-    - user
+    Rate limiting:
+    - 10 requests/minute per IP.
+    - 5 requests/minute per email.
     """
+    enforce_auth_rate_limits(
+        request=request,
+        email=payload.email,
+        scope="auth_login",
+        ip_limit=10,
+        email_limit=5,
+        window_seconds=60,
+    )
+
     try:
         return await login_user(payload)
 
@@ -629,6 +860,7 @@ async def auth_login_endpoint(payload: AuthLoginRequest):
             status_code=500,
             detail="Internal error while logging in.",
         ) from exc
+
 
 @app.post("/auth/forgot-password", response_model=AuthForgotPasswordResponse)
 async def auth_forgot_password_endpoint(payload: AuthForgotPasswordRequest):

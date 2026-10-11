@@ -79,6 +79,17 @@ VENUE_MEMBERSHIPS_COLLECTION = os.getenv(
     "venue_memberships",
 )
 
+
+# ============================================================
+# XAPITY ACCESS — RATE LIMITING
+# ============================================================
+
+RATE_LIMITS_COLLECTION = os.getenv(
+    "RATE_LIMITS_COLLECTION",
+    "rate_limits",
+)
+
+
 _client: Optional[MongoClient] = None
 
 
@@ -163,6 +174,39 @@ def initialize_visitor_pending_registrations_storage() -> None:
     except PyMongoError as exc:
         raise RuntimeError(
             "Error initializing visitor registration storage."
+        ) from exc
+
+
+# ============================================================
+# XAPITY ACCESS — RATE LIMITING PERSISTENCE
+# ============================================================
+
+def get_rate_limits_collection() -> Collection:
+    """
+    Returns the shared MongoDB collection used
+    for API rate limiting.
+    """
+    return get_database()[RATE_LIMITS_COLLECTION]
+
+
+def initialize_rate_limits_storage() -> None:
+    """
+    Creates the TTL index for rate-limit counters.
+
+    The _id field already has a unique index.
+    """
+    try:
+        collection = get_rate_limits_collection()
+
+        collection.create_index(
+            "expiresAt",
+            expireAfterSeconds=0,
+            name="ttl_rate_limits_expires_at",
+        )
+
+    except PyMongoError as exc:
+        raise RuntimeError(
+            "Error initializing rate limits storage."
         ) from exc
 
 
