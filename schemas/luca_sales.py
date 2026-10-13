@@ -1,17 +1,12 @@
 # schemas/luca_sales.py
 """
-Schemas HTTP para el agente comercial determinista de Luca.
+Schemas HTTP para el agente comercial y conversacional
+Xapity-Luca.
 
-Este módulo define exclusivamente los contratos de entrada y salida
-utilizados por FastAPI.
-
-No contiene:
-
-- lógica de negocio;
-- consultas a Mongo;
-- detección de intenciones;
-- construcción de respuestas;
-- llamadas a modelos de lenguaje.
+Define los contratos de entrada y salida utilizados
+por FastAPI, tanto para respuestas conversacionales
+como para consultas comerciales deterministas
+o asistidas por Ollama.
 """
 
 from __future__ import annotations

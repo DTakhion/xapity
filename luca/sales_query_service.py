@@ -1004,6 +1004,7 @@ def get_total_documents(
     month: int | None = None,
     document_type: str = SalesDocumentType.ALL.value,
     document_code: int | None = None,
+    status: str | None = None,
     collection: Collection | None = None,
 ) -> dict[str, Any]:
     """
@@ -1087,6 +1088,34 @@ def get_total_documents(
             for document in documents
             if _extract_document_code(document) == document_code
         ]
+    
+    # ----------------------------------------------
+    # Validación del estado comercial
+    # ----------------------------------------------
+
+    if status is not None:
+        if not isinstance(status, str):
+            raise ValueError(
+                "status debe ser un texto o None."
+            )
+
+        status = status.strip().upper()
+
+        if status != RECEIVABLE_STATUS:
+            raise ValueError(
+                f"Estado comercial no soportado: {status}"
+            )
+    
+    # ----------------------------------------------
+    # Filtro por estado comercial
+    # ----------------------------------------------
+
+    if status == RECEIVABLE_STATUS:
+        documents = [
+            document
+            for document in documents
+            if _is_receivable(document)
+        ]
 
     # ----------------------------------------------
     # Resultado
@@ -1105,6 +1134,7 @@ def get_total_documents(
             "month": context.month,
             "documentType": selected_type.value,
             "documentCode": document_code,
+            "status": status,
         },
         "result": {
             "documentsCount": len(documents),
@@ -1401,6 +1431,139 @@ def get_receivable_documents(
                 timezone.utc
             ).isoformat(),
             "deterministic": True,
+        },
+    }
+
+
+# ==================================================
+# CONSULTA: FACTURAS POR COBRAR MÁS ATRASADAS
+# ==================================================
+
+def get_overdue_receivable_invoices(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    collection: Collection | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """
+    Retorna las facturas por cobrar vencidas,
+    ordenadas desde la más atrasada.
+
+    Criterios:
+    - Facturas códigos 33 y 34.
+    - Estado POR COBRAR.
+    - Fecha de vencimiento anterior a hoy.
+    - Días de atraso calculados por fecha calendario.
+
+    Las facturas sin vencimiento válido no se
+    clasifican como atrasadas.
+    """
+
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit <= 0
+        or limit > 100
+    ):
+        raise ValueError("limit debe estar entre 1 y 100.")
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        if collection is not None
+        else get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    invoice_codes = {
+        int(code.value)
+        for code in DOCUMENT_CODES_BY_TYPE[
+            SalesDocumentType.INVOICE
+        ]
+    }
+
+    today = datetime.now(timezone.utc).date()
+    overdue_invoices = []
+    missing_due_date_count = 0
+
+    for document in documents:
+        if not _is_receivable(document):
+            continue
+
+        if _extract_document_code(document) not in invoice_codes:
+            continue
+
+        due_date = _extract_due_date(document)
+
+        if due_date is None:
+            missing_due_date_count += 1
+            continue
+
+        # Fechas sin timezone: se interpretan como
+        # fechas calendario, sin conversión.
+        # Fechas con timezone: se conserva la fecha
+        # calendario representada en el dato.
+        due_day = due_date.date()
+        days_overdue = (today - due_day).days
+
+        if days_overdue <= 0:
+            continue
+
+        normalized = _normalize_document_result(document)
+        normalized["daysOverdue"] = days_overdue
+
+        overdue_invoices.append(normalized)
+
+    overdue_invoices.sort(
+        key=lambda item: (
+            -item["daysOverdue"],
+            item["sourceKey"] or "",
+        )
+    )
+
+    returned_documents = overdue_invoices[:limit]
+
+    return {
+        "queryType": "overdue_receivable_invoices",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+            "documentType": "invoice",
+            "status": RECEIVABLE_STATUS,
+            "overdueOnly": True,
+            "limit": limit,
+        },
+        "result": {
+            "documentsCount": len(overdue_invoices),
+            "returnedDocumentsCount": len(returned_documents),
+            "totalAmount": sum(
+                item["amount"]
+                for item in overdue_invoices
+            ),
+            "missingDueDateCount": missing_due_date_count,
+            "documents": returned_documents,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+            "amountBasis": "gross_document_amount",
+            "asOfDate": today.isoformat(),
+            "overdueBasis": "due_date",
         },
     }
 

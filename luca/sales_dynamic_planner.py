@@ -14,6 +14,7 @@ from luca.sales_query_service import (
     get_sales_overview,
     get_total_documents,
     get_total_sales_amount,
+    get_overdue_receivable_invoices,
 )
 
 
@@ -40,12 +41,16 @@ DynamicToolHandler = Callable[..., dict[str, Any]]
 class DynamicTool:
     """
     Herramienta determinista disponible para el planner.
+
+    allowed_arguments describe los parámetros que
+    Ollama puede solicitar para esta herramienta.
     """
 
     name: str
     description: str
     result_semantics: str
     handler: DynamicToolHandler
+    allowed_arguments: Mapping[str, tuple[Any, ...]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +78,13 @@ DYNAMIC_TOOLS: dict[str, DynamicTool] = {
             "Incluye cantidad total de documentos, monto total, "
             "documentos y monto por cobrar, cantidad de clientes "
             "únicos, notas de crédito, documentos anulados y "
-            "documentos vinculados."
+            "documentos vinculados. "
+            "IMPORTANTE: esta es la herramienta que debes utilizar "
+            "cuando el usuario pregunte cuántos clientes tiene, "
+            "cuántos clientes únicos existen o solicite el total "
+            "de clientes. El campo uniqueCustomers contiene esa "
+            "cantidad. La herramienta total_documents NO permite "
+            "contar clientes."
         ),
         result_semantics=(
             "result.uniqueCustomers representa la cantidad de "
@@ -85,15 +96,32 @@ DYNAMIC_TOOLS: dict[str, DynamicTool] = {
     "total_documents": DynamicTool(
         name="total_documents",
         description=(
-            "Obtiene la cantidad de documentos de venta y su "
-            "monto total para un período."
+            "Cuenta documentos comerciales y calcula su monto total. "
+            "Permite seleccionar todos los documentos, solamente "
+            "facturas o solamente notas de crédito. "
+            "También permite filtrar por estado de cobranza. "
+            "Utiliza esta herramienta cuando la pregunta requiera "
+            "contar documentos aplicando estos filtros."
         ),
         result_semantics=(
             "result.documentsCount representa la cantidad de "
-            "documentos encontrados y result.totalAmount "
-            "representa su monto total."
+            "documentos que cumplen todos los filtros aplicados. "
+            "result.totalAmount representa la suma de sus montos "
+            "documentales. Los filtros efectivamente utilizados "
+            "se encuentran en filters."
         ),
         handler=get_total_documents,
+        allowed_arguments={
+            "document_type": (
+                "all",
+                "invoice",
+                "credit_note",
+            ),
+            "status": (
+                None,
+                "POR COBRAR",
+            ),
+        },
     ),
     "total_sales_amount": DynamicTool(
         name="total_sales_amount",
@@ -108,6 +136,43 @@ DYNAMIC_TOOLS: dict[str, DynamicTool] = {
             "comerciales de Luca."
         ),
         handler=get_total_sales_amount,
+    ),
+    
+    "overdue_receivable_invoices": DynamicTool(
+        name="overdue_receivable_invoices",
+        description=(
+            "Obtiene el listado de las facturas por cobrar "
+            "más atrasadas o vencidas. "
+            "Selecciona exclusivamente facturas con estado "
+            "POR COBRAR y fecha de vencimiento anterior a hoy. "
+            "Ordena las facturas por días de atraso, de mayor "
+            "a menor. Utiliza esta herramienta cuando el usuario "
+            "pregunte cuáles son las facturas más atrasadas, "
+            "más antiguas por vencimiento o más morosas. "
+            "No la utilices para contar todas las facturas "
+            "por cobrar sin considerar su vencimiento."
+        ),
+        result_semantics=(
+            "result.documentsCount es la cantidad total de "
+            "facturas vencidas que cumplen los filtros. "
+            "result.returnedDocumentsCount es la cantidad "
+            "de facturas incluidas en la respuesta. "
+            "result.documents contiene las facturas ordenadas "
+            "desde la más atrasada. "
+            "Cada documento incluye customerName, documentName, "
+            "dueDate, daysOverdue y amount. "
+            "daysOverdue representa los días calendario "
+            "transcurridos desde el vencimiento. "
+            "amount representa el monto documental original, "
+            "no necesariamente el saldo pendiente de cobro. "
+            "No afirmes que result.totalAmount es el saldo "
+            "insoluto. Las facturas sin fecha de vencimiento "
+            "válida no se clasifican como atrasadas."
+        ),
+        handler=get_overdue_receivable_invoices,
+        allowed_arguments={
+            "limit": (5, 10, 20, 50, 100),
+        },
     ),
 }
 
@@ -205,7 +270,8 @@ def _call_ollama_text(
 
 def _build_tools_description() -> str:
     """
-    Construye el catálogo que el LLM puede inspeccionar.
+    Construye el catálogo de herramientas y argumentos
+    que Ollama puede utilizar para planificar.
     """
 
     lines: list[str] = []
@@ -215,6 +281,19 @@ def _build_tools_description() -> str:
             f"- {tool.name}: {tool.description}"
         )
 
+        if tool.allowed_arguments:
+            for argument, allowed_values in (
+                tool.allowed_arguments.items()
+            ):
+                values = json.dumps(
+                    allowed_values,
+                    ensure_ascii=False,
+                )
+
+                lines.append(
+                    f"    {argument}: {values}"
+                )
+
     return "\n".join(lines)
 
 
@@ -222,6 +301,32 @@ def _build_tools_description() -> str:
 # PLANIFICACIÓN
 # ==================================================
 
+def _normalize_allowed_argument(
+    *,
+    argument: str,
+    value: Any,
+    allowed_values: tuple[Any, ...],
+) -> Any:
+    """
+    Normaliza strings numéricos cuando el argumento
+    admite valores enteros explícitamente autorizados.
+
+    No modifica argumentos de texto ni amplía
+    los valores permitidos.
+    """
+
+    if (
+        isinstance(value, str)
+        and value.isascii()
+        and value.isdecimal()
+        and any(
+            type(allowed) is int
+            for allowed in allowed_values
+        )
+    ):
+        value = int(value)
+
+    return value
 
 def _build_plan(
     *,
@@ -249,7 +354,49 @@ No inventes herramientas.
 No inventes datos.
 No respondas todavía la pregunta.
 No hagas cálculos comerciales.
+
 Selecciona solamente una herramienta.
+
+Identifica los argumentos necesarios para responder
+la pregunta completa del usuario.
+
+Los campos descritos como resultados de una herramienta
+NO son argumentos de entrada.
+
+En particular, uniqueCustomers es un campo de resultado
+de sales_overview, NO un argumento.
+
+Si una herramienta no declara argumentos permitidos,
+debes devolver "arguments": {{}}.
+
+Para responder cuántos clientes únicos existen,
+selecciona sales_overview con "arguments": {{}}.
+
+Cada argumento debe contener un único valor escalar
+(string, número o null), nunca una lista ni un objeto.
+
+Los valores mostrados en el catálogo representan
+opciones permitidas, no listas que debas devolver.
+
+Por ejemplo, si document_type permite:
+["all", "invoice", "credit_note"]
+
+Y necesitas facturas, debes devolver:
+"document_type": "invoice"
+
+NO debes devolver:
+"document_type": ["invoice"]
+
+No omitas condiciones expresadas por el usuario.
+
+No inventes filtros que el usuario no haya solicitado.
+
+Si la herramienta permite responder solamente una
+parte de la pregunta, no la selecciones.
+
+No incluyas business_id, year ni month dentro de
+arguments. Esos valores son administrados por
+la aplicación.
 
 HERRAMIENTAS DISPONIBLES:
 
@@ -268,6 +415,9 @@ Responde exclusivamente con JSON:
 
 {{
   "tool": "nombre_de_herramienta",
+  "arguments": {{
+    "nombre_argumento": "valor_permitido"
+  }},
   "reason": "explicación breve"
 }}
 
@@ -276,6 +426,7 @@ la información necesaria, responde:
 
 {{
   "tool": null,
+  "arguments": {{}},
   "reason": "explicación breve"
 }}
 """.strip()
@@ -293,6 +444,78 @@ la información necesaria, responde:
                 "El planner seleccionó una herramienta "
                 "no autorizada."
             )
+    
+    # ----------------------------------------------
+    # Validación estructural de argumentos
+    # ----------------------------------------------
+
+    arguments = plan.get("arguments", {})
+
+    if not isinstance(arguments, dict):
+        raise ValueError(
+            "El planner debe devolver arguments como objeto."
+        )
+
+    if tool_name is None:
+        if arguments:
+            raise ValueError(
+                "Un plan sin herramienta no puede tener argumentos."
+            )
+    else:
+        tool = DYNAMIC_TOOLS[tool_name]
+
+        allowed_arguments = tool.allowed_arguments or {}
+        
+        # Corrección controlada:
+        # uniqueCustomers es un campo de salida,
+        # nunca un argumento de sales_overview.
+        if (
+            tool_name == "sales_overview"
+            and set(arguments) == {"uniqueCustomers"}
+        ):
+            arguments = {}
+            plan["arguments"] = arguments
+
+        for argument, value in arguments.items():
+            if argument not in allowed_arguments:
+                raise ValueError(
+                    f"Argumento no autorizado: {argument}"
+                )
+
+            # Normalización segura:
+            # ["invoice"] -> "invoice"
+            # No se aceptan listas con múltiples valores.
+            if isinstance(value, list):
+                if len(value) != 1:
+                    raise ValueError(
+                        f"El argumento {argument} debe contener "
+                        "un único valor."
+                    )
+
+                value = value[0]
+                arguments[argument] = value
+
+            # Rechazar valores estructurados no permitidos.
+            if isinstance(value, (list, dict)):
+                raise ValueError(
+                    f"Formato no autorizado para {argument}."
+                )
+
+            value = _normalize_allowed_argument(
+                argument=argument,
+                value=value,
+                allowed_values=allowed_arguments[argument],
+            )
+
+            arguments[argument] = value
+
+            if (
+                isinstance(value, bool)
+                or value not in allowed_arguments[argument]
+            ):
+                raise ValueError(
+                    f"Valor no autorizado para {argument}: {value}"
+                )
 
     return plan
 
@@ -308,6 +531,7 @@ def _execute_tool(
     business_id: int,
     year: int | None,
     month: int | None,
+    arguments: dict[str, Any],
     collection: Collection | None,
 ) -> dict[str, Any]:
     """
@@ -326,6 +550,27 @@ def _execute_tool(
         "year": year,
         "month": month,
     }
+    
+    # Validación defensiva antes de ejecutar.
+    allowed_arguments = tool.allowed_arguments or {}
+
+    for argument, value in arguments.items():
+        if argument not in allowed_arguments:
+            raise ValueError(
+                f"Argumento no autorizado: {argument}"
+            )
+
+        if isinstance(value, (list, dict)):
+            raise ValueError(
+                f"Formato no autorizado para {argument}."
+            )
+
+        if value not in allowed_arguments[argument]:
+            raise ValueError(
+                f"Valor no autorizado para {argument}: {value}"
+            )
+
+        kwargs[argument] = value
 
     if collection is not None:
         kwargs["collection"] = collection
@@ -344,6 +589,77 @@ def _execute_tool(
 # SÍNTESIS DE RESPUESTA
 # ==================================================
 
+def _format_overdue_receivable_invoices(
+    tool_result: Mapping[str, Any],
+) -> str:
+    """
+    Construye una respuesta determinista para
+    facturas vencidas, sin llamar a Ollama.
+    """
+
+    result = tool_result.get("result", tool_result)
+
+    documents = result.get("documents", [])
+    total = result.get("documentsCount", 0)
+
+    if not documents:
+        return (
+            "No se encontraron facturas por cobrar "
+            "con fecha de vencimiento anterior a hoy."
+        )
+
+    def format_amount(value: Any) -> str:
+        amount = float(value or 0)
+        return f"${amount:,.0f}".replace(",", ".")
+
+    def format_date(value: Any) -> str:
+        if not isinstance(value, str) or not value:
+            return "Sin fecha"
+
+        date_part = value[:10]
+        parts = date_part.split("-")
+
+        if len(parts) != 3:
+            return date_part
+
+        return f"{parts[2]}/{parts[1]}/{parts[0]}"
+
+    lines = [
+        f"Se encontraron {total} facturas vencidas.",
+        "",
+        f"Estas son las {len(documents)} facturas "
+        "por cobrar más atrasadas:",
+        "",
+    ]
+
+    for index, document in enumerate(documents, start=1):
+        customer = document.get(
+            "customerName",
+            "Cliente no identificado",
+        )
+        due_date = format_date(
+            document.get("dueDate")
+        )
+        days = document.get("daysOverdue", 0)
+        amount = format_amount(
+            document.get("amount")
+        )
+
+        lines.extend([
+            f"{index}. {customer}",
+            f"   Vencimiento: {due_date}",
+            f"   Días de atraso: {days}",
+            f"   Monto documental: {amount}",
+            "",
+        ])
+
+    lines.append(
+        "Nota: los montos corresponden al valor "
+        "documental de las facturas, no necesariamente "
+        "al saldo pendiente de cobro."
+    )
+
+    return "\n".join(lines)
 
 def _build_dynamic_answer(
     *,
@@ -355,8 +671,33 @@ def _build_dynamic_answer(
     Construye la respuesta final utilizando exclusivamente
     datos obtenidos desde la herramienta determinista.
     """
+    if tool_name == "overdue_receivable_invoices":
+        return _format_overdue_receivable_invoices(
+            tool_result
+        )
 
     tool = DYNAMIC_TOOLS[tool_name]
+    
+    presentation_instructions = ""
+
+    if tool_name == "overdue_receivable_invoices":
+        presentation_instructions = """
+        Para esta consulta:
+
+        - Indica cuántas facturas vencidas existen en total.
+        - Presenta todas las facturas incluidas en result.documents.
+        - Para cada factura muestra:
+        cliente, fecha de vencimiento, días de atraso
+        y monto documental.
+        - Mantén el orden recibido.
+        - No omitas documentos.
+        - No confundas monto documental con saldo pendiente.
+        - No afirmes que los resultados son una muestra
+        aleatoria o que no son representativos.
+        - Si hay más facturas que las mostradas, indica
+        que se presentan las más atrasadas.
+        - No inventes información ausente.
+        """
 
     serialized_result = json.dumps(
         tool_result,
@@ -374,6 +715,10 @@ la herramienta.
 SEMÁNTICA DEL RESULTADO:
 
 {tool.result_semantics}
+
+INSTRUCCIONES DE PRESENTACIÓN:
+
+{presentation_instructions}
 
 Examina los datos y utiliza esta semántica para
 interpretar correctamente sus campos.
@@ -475,6 +820,7 @@ def execute_dynamic_sales_query(
         business_id=business_id,
         year=year,
         month=month,
+        arguments=plan.get("arguments", {}),
         collection=collection,
     )
 

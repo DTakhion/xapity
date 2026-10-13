@@ -1679,21 +1679,19 @@ def xapity_luca_sales_chat_endpoint(
     x_request_id: Optional[str] = Header(default=None),
 ):
     """
-    Agente comercial determinista de Luca.
+    Agente comercial y conversacional Xapity-Luca.
 
     Flujo:
         request HTTP
-        -> sales intent router
-        -> sales query service
-        -> Mongo
-        -> sales response builder
+        -> SalesAgent
+        -> ConversationAgent (primera capa)
+        -> Sales Hybrid Router (si corresponde)
+        -> ejecución determinista o planner dinámico
         -> respuesta estructurada
 
-    MVP:
-    - El businessId se recibe desde el body.
-    - No requiere autenticación todavía.
-    - No utiliza LLM.
-    - Las consultas y respuestas son deterministas.
+    La capa conversacional es determinista.
+    Las consultas comerciales pueden utilizar Ollama
+    como respaldo para clasificación y planificación.
     """
 
     request_id = (
@@ -1740,97 +1738,97 @@ def xapity_luca_sales_chat_endpoint(
             },
         ) from exc
 
-# ============================================================
-# XAPITY LUCA — GLOBAL AGENT
-# ============================================================
+# # ============================================================
+# # XAPITY LUCA — GLOBAL AGENT
+# # ============================================================
 
 
-@app.post(
-    "/xapity-luca/chat",
-    response_model=LucaChatResponse,
-)
-def xapity_luca_chat_endpoint(
-    req: LucaChatRequest,
-    x_request_id: Optional[str] = Header(default=None),
-):
-    """
-    Agente global de Xapity.
+# @app.post(
+#     "/xapity-luca/chat",
+#     response_model=LucaChatResponse,
+# )
+# def xapity_luca_chat_endpoint(
+#     req: LucaChatRequest,
+#     x_request_id: Optional[str] = Header(default=None),
+# ):
+#     """
+#     Agente global de Xapity.
 
-    Flujo:
+#     Flujo:
 
-        request HTTP
-        -> XapityAgent
-            -> ConversationAgent
-            -> SalesAgent
-            -> ReportsAgent
-            -> fallback global
-        -> respuesta estructurada
+#         request HTTP
+#         -> XapityAgent
+#             -> ConversationAgent
+#             -> SalesAgent
+#             -> ReportsAgent
+#             -> fallback global
+#         -> respuesta estructurada
 
-    Routing actual:
+#     Routing actual:
 
-    1. ConversationAgent intenta resolver interacciones generales.
-    2. Si no resuelve, XapityAgent delega a SalesAgent.
-    3. Si SalesAgent no reconoce la consulta, delega a ReportsAgent.
-    4. Si ningún agente reconoce la consulta, XapityAgent
-       retorna un fallback global.
+#     1. ConversationAgent intenta resolver interacciones generales.
+#     2. Si no resuelve, XapityAgent delega a SalesAgent.
+#     3. Si SalesAgent no reconoce la consulta, delega a ReportsAgent.
+#     4. Si ningún agente reconoce la consulta, XapityAgent
+#        retorna un fallback global.
 
-    MVP:
-    - El businessId se recibe desde el body.
-    - ConversationAgent no requiere businessId.
-    - SalesAgent utiliza businessId para acceder a datos comerciales.
-    - ReportsAgent utiliza businessId para consultar snapshots
-      sincronizados en MongoDB.
-    - queryFrom/queryTo permiten solicitar un período explícito
-      para reportes cuando corresponda.
-    - No requiere autenticación todavía.
-    - El routing actual es determinista.
-    """
+#     MVP:
+#     - El businessId se recibe desde el body.
+#     - ConversationAgent no requiere businessId.
+#     - SalesAgent utiliza businessId para acceder a datos comerciales.
+#     - ReportsAgent utiliza businessId para consultar snapshots
+#       sincronizados en MongoDB.
+#     - queryFrom/queryTo permiten solicitar un período explícito
+#       para reportes cuando corresponda.
+#     - No requiere autenticación todavía.
+#     - El routing actual es determinista.
+#     """
 
-    request_id = (
-        str(x_request_id).strip()
-        if x_request_id
-        else str(uuid.uuid4())
-    )
+#     request_id = (
+#         str(x_request_id).strip()
+#         if x_request_id
+#         else str(uuid.uuid4())
+#     )
 
-    try:
-        result = ask_xapity(
-            question=req.question,
-            business_id=req.business_id,
-            year=req.year,
-            month=req.month,
-            query_from=req.query_from,
-            query_to=req.query_to,
-            limit=req.limit,
-            raise_errors=True,
-        )
+#     try:
+#         result = ask_xapity(
+#             question=req.question,
+#             business_id=req.business_id,
+#             year=req.year,
+#             month=req.month,
+#             query_from=req.query_from,
+#             query_to=req.query_to,
+#             limit=req.limit,
+#             raise_errors=True,
+#         )
 
-        return {
-            "requestId": request_id,
-            **result,
-        }
+#         return {
+#             "requestId": request_id,
+#             **result,
+#         }
 
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "xapity_luca_invalid_request",
-                "message": str(exc),
-                "request_id": request_id,
-            },
-        ) from exc
+#     except (TypeError, ValueError) as exc:
+#         raise HTTPException(
+#             status_code=400,
+#             detail={
+#                 "error": "xapity_luca_invalid_request",
+#                 "message": str(exc),
+#                 "request_id": request_id,
+#             },
+#         ) from exc
 
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "xapity_luca_internal_error",
-                "message": (
-                    "No fue posible procesar la consulta "
-                    "en Xapity."
-                ),
-                "request_id": request_id,
-            },
-        ) from exc
+#     except Exception as exc:
+#         raise HTTPException(
+#             status_code=500,
+#             detail={
+#                 "error": "xapity_luca_internal_error",
+#                 "message": (
+#                     "No fue posible procesar la consulta "
+#                     "en Xapity."
+#                 ),
+#                 "request_id": request_id,
+#             },
+#         ) from exc
 
 @app.post("/auth/logout")
 async def auth_logout_endpoint():
