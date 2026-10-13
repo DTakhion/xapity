@@ -733,30 +733,30 @@ RULES: tuple[IntentRule, ...] = (
     # Documentos específicos
     # ------------------------------------------------------------------
         
-    IntentRule(
-        name="total_documents",
-        intent=SalesIntent.TOTAL_DOCUMENTS,
-        operation=SalesOperation.QUERY,
-        patterns=compile_patterns(
-            # Todos los documentos
-            r"\bcuantos?\s+documentos?\s+(?:de\s+venta\s+|comerciales?\s+)?(?:tengo|existen|hay)\b",
-            r"\bcuantos?\s+documentos?\s+de\s+venta\b",
-            r"\btotal\s+de\s+documentos\b",
-            r"\bnumero\s+de\s+documentos\b",
+    # IntentRule(
+    #     name="total_documents",
+    #     intent=SalesIntent.TOTAL_DOCUMENTS,
+    #     operation=SalesOperation.QUERY,
+    #     patterns=compile_patterns(
+    #         # Todos los documentos
+    #         r"\bcuantos?\s+documentos?\s+(?:de\s+venta\s+|comerciales?\s+)?(?:tengo|existen|hay)\b",
+    #         r"\bcuantos?\s+documentos?\s+de\s+venta\b",
+    #         r"\btotal\s+de\s+documentos\b",
+    #         r"\bnumero\s+de\s+documentos\b",
 
-            # Facturas
-            r"\bcuantas?\s+facturas?\s+(?:de\s+venta\s+)?(?:tengo|existen|hay)\b",
-            r"\btotal\s+de\s+facturas\b",
-            r"\bnumero\s+de\s+facturas\b",
+    #         # Facturas
+    #         r"\bcuantas?\s+facturas?\s+(?:de\s+venta\s+)?(?:tengo|existen|hay)\b",
+    #         r"\btotal\s+de\s+facturas\b",
+    #         r"\bnumero\s+de\s+facturas\b",
 
-            # Notas de crédito
-            r"\bcuantas?\s+notas?\s+de\s+credito\s+(?:tengo|existen|hay)\b",
-            r"\btotal\s+de\s+notas?\s+de\s+credito\b",
-            r"\bnumero\s+de\s+notas?\s+de\s+credito\b",
-        ),
-        confidence=1.0,
-        extractor=extract_total_documents_entities,
-    ),
+    #         # Notas de crédito
+    #         r"\bcuantas?\s+notas?\s+de\s+credito\s+(?:tengo|existen|hay)\b",
+    #         r"\btotal\s+de\s+notas?\s+de\s+credito\b",
+    #         r"\bnumero\s+de\s+notas?\s+de\s+credito\b",
+    #     ),
+    #     confidence=1.0,
+    #     extractor=extract_total_documents_entities,
+    # ),
 
     # IntentRule(
     #     name="credit_notes",

@@ -47,6 +47,10 @@ from luca.sales_hybrid_router import (
     route_hybrid_sales_intent,
 )
 
+from luca.conversation_agent import (
+    ConversationAgent,
+)
+
 from luca.sales_dynamic_planner import (
     execute_dynamic_sales_query,
 )
@@ -581,6 +585,46 @@ class SalesAgent:
 
         try:
             _validate_request(request)
+
+            # ----------------------------------------------
+            # CAPA CONVERSACIONAL
+            # ----------------------------------------------
+
+            conversation_response = ConversationAgent().ask(
+                question=request.question,
+                raise_errors=True,
+            )
+
+            if conversation_response.status == "answered":
+
+                elapsed_ms = (
+                    time.perf_counter() - started_at
+                ) * 1000
+
+                return SalesAgentResponse(
+                    status="answered",
+                    answer=conversation_response.answer,
+                    intent=conversation_response.intent,
+                    confidence=conversation_response.confidence,
+                    entities=dict(conversation_response.entities),
+                    data=conversation_response.data,
+                    trace={
+                        **conversation_response.trace,
+                        "source": "conversation_agent",
+                        "executionType": "conversation",
+                        "elapsedMs": round(elapsed_ms, 3),
+                    },
+                )
+
+            if conversation_response.status != "not_handled":
+                raise RuntimeError(
+                    "Estado inesperado del agente conversacional: "
+                    f"{conversation_response.status}"
+                )
+
+            # ----------------------------------------------
+            # CAPA COMERCIAL EXISTENTE
+            # ----------------------------------------------
 
             intent_result = route_hybrid_sales_intent(
                 request.question

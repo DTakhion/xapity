@@ -111,8 +111,23 @@ REGLAS:
 - Si solicitan un panorama o resumen general
   de ventas, utiliza sales_overview.
 
-- Si solicitan contar documentos, facturas
-  o notas de crédito, utiliza total_documents.
+- Utiliza total_documents solamente cuando
+  la pregunta solicita contar documentos,
+  facturas o notas de crédito sin filtros
+  adicionales distintos del tipo documental
+  y del período.
+
+- Si la pregunta solicita contar documentos
+  aplicando condiciones adicionales, como
+  estados de cobranza, vencimientos o
+  características específicas, utiliza
+  dynamic_query.
+
+- No elimines condiciones de la pregunta
+  para ajustarla a una capacidad disponible.
+
+- Clasifica considerando la pregunta completa,
+  no solamente una coincidencia parcial.
 
 - Si solicitan facturas en general,
   document_type debe ser invoice.
@@ -152,10 +167,14 @@ REGLAS:
   y month en null.
 
 
-- Si la pregunta requiere un filtro que
-  no está disponible, por ejemplo, contar
-  exclusivamente facturas exentas,
-  devuelve unknown.
+- Si una consulta comercial requiere filtros,
+  operaciones o combinaciones que no están
+  disponibles en las capacidades predefinidas,
+  utiliza dynamic_query.
+
+- Utiliza unknown solamente cuando la pregunta
+  no corresponda al dominio comercial o
+  no pueda interpretarse con seguridad.
 
 - Si no puedes clasificar con seguridad,
   devuelve unknown.

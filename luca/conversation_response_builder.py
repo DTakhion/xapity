@@ -180,21 +180,20 @@ def build_capabilities_response(
     entities: dict[str, Any],
 ) -> str:
     """
-    Describe las capacidades actualmente disponibles.
-
-    La respuesta debe reflejar únicamente capacidades realmente
-    implementadas en Xapity.
+    Describe las capacidades comerciales
+    actualmente disponibles en Xapity-Luca.
     """
 
     return (
-        "Actualmente puedo ayudarte con información de ventas y "
-        "cuentas por cobrar. Por ejemplo, puedes preguntarme cuánto "
-        "has vendido, revisar tus principales clientes, consultar "
-        "facturas pendientes o vencidas, analizar tendencias y "
-        "comparaciones de ventas, y revisar documentos comerciales. "
-        "También puedo explicar algunos resultados, proponerte acciones "
-        "comerciales y ejecutar acciones específicas cuando esa "
-        "capacidad esté disponible."
+        "Actualmente puedo ayudarte a consultar información "
+        "de tus ventas y cuentas por cobrar. "
+        "Por ejemplo, puedes preguntarme cuánto has vendido "
+        "en un período, cuántos documentos comerciales tienes, "
+        "cuántos clientes únicos aparecen en tus ventas, "
+        "cuántas facturas tienes por cobrar o cuáles son "
+        "las facturas vencidas más atrasadas. "
+        "También puedo entregarte un resumen general "
+        "de tu actividad comercial."
     )
 
 
