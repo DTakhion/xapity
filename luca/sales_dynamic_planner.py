@@ -15,7 +15,11 @@ from luca.sales_query_service import (
     get_total_documents,
     get_total_sales_amount,
     get_overdue_receivable_invoices,
+    get_top_customers_by_sales,
+    get_top_customers_by_receivables,
 )
+
+
 
 
 OLLAMA_BASE_URL = os.getenv(
@@ -84,7 +88,19 @@ DYNAMIC_TOOLS: dict[str, DynamicTool] = {
             "cuántos clientes únicos existen o solicite el total "
             "de clientes. El campo uniqueCustomers contiene esa "
             "cantidad. La herramienta total_documents NO permite "
-            "contar clientes."
+            "contar clientes."            
+            "Esta herramienta solo entrega indicadores agregados. "
+            "NO identifica clientes individuales ni permite ordenar "
+            "clientes por facturación. "
+            "Si el usuario pregunta a qué cliente le ha facturado más, "
+            "cuál es su principal cliente o solicita un ranking de "
+            "clientes, utiliza top_customers_by_sales. "
+            "NO utilices sales_overview para esas preguntas."
+            "Si el usuario pregunta qué clientes le deben más, "
+            "quiénes son sus mayores deudores o solicita un ranking "
+            "de clientes por cobrar, utiliza "
+            "top_customers_by_receivables. "
+
         ),
         result_semantics=(
             "result.uniqueCustomers representa la cantidad de "
@@ -174,6 +190,96 @@ DYNAMIC_TOOLS: dict[str, DynamicTool] = {
             "limit": (5, 10, 20, 50, 100),
         },
     ),
+    
+    "top_customers_by_sales": DynamicTool(
+        name="top_customers_by_sales",
+        description=(
+            "Obtiene el ranking de clientes con mayor facturación "
+            "bruta en el período consultado. "
+            "Agrupa las facturas válidas por cliente y ordena "
+            "de mayor a menor monto facturado. "
+            "Utiliza esta herramienta cuando el usuario pregunte "
+            "cuál es el cliente al que más ha facturado, "
+            "quién es su principal cliente por facturación, "
+            "qué cliente tiene la mayor facturación o solicite "
+            "un ranking de clientes por montos facturados. "
+            "Si pregunta por un solo cliente, utiliza limit=1. "
+            "Si solicita un top 5, utiliza limit=5. "
+            "Si no indica una cantidad, utiliza el límite "
+            "predeterminado de la herramienta. "
+            "No utilices sales_overview para identificar "
+            "al cliente con mayor facturación."
+        ),
+        result_semantics=(
+            "result.customers contiene los clientes ordenados "
+            "de mayor a menor facturación bruta. "
+            "Cada cliente incluye customerRut, customerName, "
+            "invoicesCount y totalAmount. "
+            "result.customersCount representa el número total "
+            "de clientes identificados en el período. "
+            "result.returnedCustomersCount representa el número "
+            "de clientes incluidos en el ranking solicitado. "
+            "result.invoicesCount y result.totalAmount "
+            "corresponden a todas las facturas válidas del período, "
+            "no solamente a los clientes mostrados. "
+            "Los montos corresponden al total documental "
+            "de facturas 33 y 34, con IVA incluido cuando aplica. "
+            "Se excluyen documentos anulados. "
+            "Las notas de crédito no se descuentan. "
+            "Si el usuario solicita un único cliente, "
+            "identifica el primer elemento de result.customers. "
+            "No confundas la facturación del primer cliente "
+            "con result.totalAmount."
+        ),
+        handler=get_top_customers_by_sales,
+        allowed_arguments={
+            "limit": (1, 5, 10, 20, 50, 100),
+        },
+    ),
+    
+    "top_customers_by_receivables": DynamicTool(
+        name="top_customers_by_receivables",
+        description=(
+            "Obtiene el ranking de clientes con mayores montos "
+            "documentales por cobrar. "
+            "Agrupa las facturas con estado POR COBRAR por cliente "
+            "y ordena de mayor a menor monto pendiente documental. "
+            "Utiliza esta herramienta cuando el usuario pregunte "
+            "qué clientes le deben más, quiénes son sus mayores "
+            "deudores, qué cliente tiene más dinero por cobrar "
+            "o solicite un ranking de clientes por cobranza. "
+            "Si pregunta por un solo cliente, utiliza limit=1. "
+            "Si solicita un top 5, utiliza limit=5. "
+            "Si no indica cantidad, utiliza el límite "
+            "predeterminado de la herramienta. "
+            "NO utilices sales_overview ni top_customers_by_sales "
+            "para identificar clientes con mayores montos por cobrar."
+        ),
+        result_semantics=(
+            "result.customers contiene clientes ordenados de "
+            "mayor a menor monto documental por cobrar. "
+            "Cada cliente incluye customerRut, customerName, "
+            "invoicesCount y totalAmount. "
+            "result.customersCount representa el total de clientes "
+            "identificados con facturas POR COBRAR. "
+            "result.returnedCustomersCount representa los clientes "
+            "incluidos en el ranking solicitado. "
+            "result.invoicesCount y result.totalAmount corresponden "
+            "a todas las facturas POR COBRAR del período, "
+            "no solamente a los clientes mostrados. "
+            "Solo considera facturas 33 y 34 con estado POR COBRAR. "
+            "Excluye facturas parcialmente cobradas y notas de crédito. "
+            "Los montos son valores documentales originales, "
+            "no saldos efectivos verificados. "
+            "No confundas el monto del primer cliente "
+            "con result.totalAmount."
+        ),
+        handler=get_top_customers_by_receivables,
+        allowed_arguments={
+            "limit": (1, 5, 10, 20, 50, 100),
+        },
+    ),
+
 }
 
 
@@ -372,6 +478,51 @@ debes devolver "arguments": {{}}.
 Para responder cuántos clientes únicos existen,
 selecciona sales_overview con "arguments": {{}}.
 
+Para identificar al cliente con mayor facturación,
+selecciona top_customers_by_sales con
+"arguments": {{"limit": 1}}.
+
+Distingue estas dos preguntas:
+
+"¿Cuántos clientes tengo?"
+-> sales_overview
+
+"¿A qué cliente le he facturado más?"
+-> top_customers_by_sales
+
+"¿Qué clientes me deben más?"
+-> top_customers_by_receivables
+
+"¿Quién es mi mayor deudor?"
+-> top_customers_by_receivables con limit=1
+
+Distingue facturación de cobranza:
+
+top_customers_by_sales identifica a los clientes
+a quienes se les ha facturado más.
+
+top_customers_by_receivables identifica a los clientes
+con mayores montos documentales POR COBRAR.
+
+Si la pregunta contiene "deben", "deudores",
+"me adeudan" o "clientes por cobrar", selecciona
+top_customers_by_receivables.
+
+No utilices sales_overview para identificar
+clientes deudores. uniqueCustomers solamente
+representa una cantidad de clientes.
+
+La palabra "cliente" por sí sola NO implica
+que debas seleccionar sales_overview.
+
+Si la pregunta pide identificar, comparar u ordenar
+clientes según montos facturados, utiliza
+top_customers_by_sales.
+
+El campo uniqueCustomers es únicamente una cantidad.
+NO contiene nombres de clientes ni montos individuales.
+
+
 Cada argumento debe contener un único valor escalar
 (string, número o null), nunca una lista ni un objeto.
 
@@ -432,6 +583,17 @@ la información necesaria, responde:
 """.strip()
 
     plan = _call_ollama_json(prompt)
+    
+    
+    # Diagnóstico temporal del planner
+    print("\n=== OLLAMA RAW PLAN ===")
+    print(json.dumps(
+        plan,
+        indent=2,
+        ensure_ascii=False,
+    ))
+    print("=======================\n")
+
 
     tool_name = plan.get("tool")
 
@@ -455,6 +617,27 @@ la información necesaria, responde:
         raise ValueError(
             "El planner debe devolver arguments como objeto."
         )
+        
+    # --------------------------------------------------
+    # Los filtros de contexto son administrados por Xapity.
+    # Ollama no puede definir ni sobrescribir estos valores.
+    # --------------------------------------------------
+
+    context_arguments = {
+        "business_id",
+        "year",
+        "month",
+    }
+
+    ignored_context = {
+        key: arguments.pop(key)
+        for key in tuple(arguments)
+        if key in context_arguments
+    }
+
+    if ignored_context:
+        plan["ignored_context_arguments"] = ignored_context
+
 
     if tool_name is None:
         if arguments:
@@ -661,6 +844,92 @@ def _format_overdue_receivable_invoices(
 
     return "\n".join(lines)
 
+
+def _format_customer_ranking(
+    *,
+    tool_name: str,
+    tool_result: Mapping[str, Any],
+) -> str:
+    """
+    Construye rankings comerciales deterministas.
+
+    Preserva exactamente los nombres y montos
+    entregados por sales_query_service.
+    """
+
+    result = tool_result.get("result", {})
+    customers = result.get("customers", [])
+
+    is_receivables = (
+        tool_name == "top_customers_by_receivables"
+    )
+
+    subject = (
+        "monto documental por cobrar"
+        if is_receivables
+        else "facturación"
+    )
+
+    if not customers:
+        return (
+            f"No se encontraron clientes con {subject} "
+            "para el período consultado."
+        )
+
+    def format_amount(value: Any) -> str:
+        amount = float(value or 0)
+        return f"${amount:,.0f}".replace(",", ".")
+
+    filters = tool_result.get("filters", {})
+    year = filters.get("year")
+    month = filters.get("month")
+
+    if year is not None and month is not None:
+        period = f"en {int(month):02d}/{year}"
+    elif year is not None:
+        period = f"en {year}"
+    else:
+        period = "en el período consultado"
+
+    if len(customers) == 1:
+        customer = customers[0]
+
+        answer = (
+            f"El cliente con mayor {subject} {period} es "
+            f"{customer['customerName']}, "
+            f"con {format_amount(customer['totalAmount'])} "
+            f"en {customer['invoicesCount']} facturas."
+        )
+
+    else:
+        lines = [
+            f"Clientes con mayor {subject} {period}:",
+            "",
+        ]
+
+        for index, customer in enumerate(
+            customers,
+            start=1,
+        ):
+            lines.append(
+                f"{index}. {customer['customerName']}: "
+                f"{format_amount(customer['totalAmount'])} "
+                f"({customer['invoicesCount']} facturas)"
+            )
+
+        answer = "\n".join(lines)
+
+    if is_receivables:
+        answer += (
+            "\n\nNota: los montos corresponden al valor "
+            "documental de facturas clasificadas como "
+            "POR COBRAR; no incluyen parcialmente cobradas "
+            "ni representan saldos efectivos verificados."
+        )
+
+    return answer
+
+
 def _build_dynamic_answer(
     *,
     question: str,
@@ -674,7 +943,17 @@ def _build_dynamic_answer(
     if tool_name == "overdue_receivable_invoices":
         return _format_overdue_receivable_invoices(
             tool_result
+        )    
+    
+    if tool_name in (
+        "top_customers_by_sales",
+        "top_customers_by_receivables",
+    ):
+        return _format_customer_ranking(
+            tool_name=tool_name,
+            tool_result=tool_result,
         )
+
 
     tool = DYNAMIC_TOOLS[tool_name]
     

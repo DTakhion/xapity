@@ -1981,3 +1981,332 @@ def get_monthly_sales_by_customer(
             "deterministic": True,
         },
     }
+
+
+# ==================================================
+# CONSULTA: RANKING DE CLIENTES POR FACTURACIÓN
+# ==================================================
+
+
+def get_top_customers_by_sales(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    limit: int = 10,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Retorna los clientes con mayor facturación bruta.
+
+    Criterios:
+    - Facturas códigos 33 y 34.
+    - Excluye documentos anulados.
+    - No descuenta notas de crédito.
+    - Utiliza montos documentales (IVA incluido).
+    - Agrupa por RUT normalizado; si falta, por nombre.
+    - Ordena de mayor a menor facturación.
+
+    El período se determina mediante year/month.
+    """
+
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit <= 0
+        or limit > 100
+    ):
+        raise ValueError("limit debe estar entre 1 y 100.")
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        if collection is not None
+        else get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    invoice_codes = {
+        int(code.value)
+        for code in DOCUMENT_CODES_BY_TYPE[
+            SalesDocumentType.INVOICE
+        ]
+    }
+
+    customer_groups: dict[str, dict[str, Any]] = {}
+
+    invoices_count = 0
+    invoices_amount = 0.0
+    unidentified_count = 0
+    unidentified_amount = 0.0
+
+    for document in documents:
+
+        if _is_cancelled(document):
+            continue
+
+        if _extract_document_code(document) not in invoice_codes:
+            continue
+
+        amount = _extract_amount(document)
+        invoices_count += 1
+        invoices_amount += amount
+
+        customer_rut = _extract_customer_rut(document)
+        customer_name = _extract_customer_name(document)
+
+        # Identificador estable para agrupación.
+        normalized_rut = (
+            "".join(
+                char
+                for char in customer_rut.upper()
+                if char.isalnum()
+            )
+            if customer_rut
+            else None
+        )
+
+        if normalized_rut:
+            customer_key = f"RUT:{normalized_rut}"
+        elif customer_name:
+            customer_key = (
+                f"NAME:{' '.join(customer_name.upper().split())}"
+            )
+        else:
+            unidentified_count += 1
+            unidentified_amount += amount
+            continue
+
+        if customer_key not in customer_groups:
+            customer_groups[customer_key] = {
+                "customerRut": customer_rut,
+                "customerName": customer_name,
+                "invoicesCount": 0,
+                "totalAmount": 0.0,
+            }
+
+        group = customer_groups[customer_key]
+
+        # Completar identificación si aparece en otro documento.
+        if not group["customerRut"] and customer_rut:
+            group["customerRut"] = customer_rut
+
+        if not group["customerName"] and customer_name:
+            group["customerName"] = customer_name
+
+        group["invoicesCount"] += 1
+        group["totalAmount"] += amount
+
+    customers = sorted(
+        customer_groups.values(),
+        key=lambda item: (
+            -item["totalAmount"],
+            item["customerRut"] or "",
+            item["customerName"] or "",
+        ),
+    )
+
+    top_customers = customers[:limit]
+
+    return {
+        "queryType": "top_customers_by_sales",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+            "documentType": "invoice",
+            "excludedCancelled": True,
+            "limit": limit,
+        },
+        "result": {
+            "customersCount": len(customers),
+            "returnedCustomersCount": len(top_customers),
+            "invoicesCount": invoices_count,
+            "totalAmount": invoices_amount,
+            "unidentifiedInvoicesCount": unidentified_count,
+            "unidentifiedAmount": unidentified_amount,
+            "customers": top_customers,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+            "amountBasis": "gross_document_amount",
+            "calculation": "invoices_only",
+        },
+    }
+
+
+# ==================================================
+# CONSULTA: RANKING DE CLIENTES POR COBRAR
+# ==================================================
+
+
+def get_top_customers_by_receivables(
+    *,
+    business_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    limit: int = 10,
+    collection: Collection | None = None,
+) -> dict[str, Any]:
+    """
+    Retorna los clientes con mayores montos documentales
+    en facturas clasificadas como POR COBRAR.
+
+    Criterios:
+    - Facturas códigos 33 y 34.
+    - Estado exacto POR COBRAR.
+    - No incluye parcialmente cobradas.
+    - No incluye notas de crédito.
+    - Agrupa por RUT normalizado; si falta, por nombre.
+    - Ordena de mayor a menor monto por cobrar.
+    - No calcula saldos efectivos ni abonos parciales.
+    """
+
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit <= 0
+        or limit > 100
+    ):
+        raise ValueError("limit debe estar entre 1 y 100.")
+
+    context = _validate_context(
+        business_id=business_id,
+        year=year,
+        month=month,
+    )
+
+    resolved_collection = (
+        collection
+        if collection is not None
+        else get_sales_items_collection()
+    )
+
+    documents = _load_current_documents(
+        collection=resolved_collection,
+        context=context,
+    )
+
+    invoice_codes = {
+        int(code.value)
+        for code in DOCUMENT_CODES_BY_TYPE[
+            SalesDocumentType.INVOICE
+        ]
+    }
+
+    customer_groups: dict[str, dict[str, Any]] = {}
+
+    invoices_count = 0
+    receivable_amount = 0.0
+    unidentified_count = 0
+    unidentified_amount = 0.0
+
+    for document in documents:
+
+        if _extract_document_code(document) not in invoice_codes:
+            continue
+
+        if not _is_receivable(document):
+            continue
+
+        amount = _extract_amount(document)
+
+        invoices_count += 1
+        receivable_amount += amount
+
+        customer_rut = _extract_customer_rut(document)
+        customer_name = _extract_customer_name(document)
+
+        normalized_rut = (
+            "".join(
+                char
+                for char in customer_rut.upper()
+                if char.isalnum()
+            )
+            if customer_rut
+            else None
+        )
+
+        if normalized_rut:
+            customer_key = f"RUT:{normalized_rut}"
+        elif customer_name:
+            customer_key = (
+                f"NAME:{' '.join(customer_name.upper().split())}"
+            )
+        else:
+            unidentified_count += 1
+            unidentified_amount += amount
+            continue
+
+        if customer_key not in customer_groups:
+            customer_groups[customer_key] = {
+                "customerRut": customer_rut,
+                "customerName": customer_name,
+                "invoicesCount": 0,
+                "totalAmount": 0.0,
+            }
+
+        group = customer_groups[customer_key]
+
+        if not group["customerRut"] and customer_rut:
+            group["customerRut"] = customer_rut
+
+        if not group["customerName"] and customer_name:
+            group["customerName"] = customer_name
+
+        group["invoicesCount"] += 1
+        group["totalAmount"] += amount
+
+    customers = sorted(
+        customer_groups.values(),
+        key=lambda item: (
+            -item["totalAmount"],
+            item["customerRut"] or "",
+            item["customerName"] or "",
+        ),
+    )
+
+    top_customers = customers[:limit]
+
+    return {
+        "queryType": "top_customers_by_receivables",
+        "businessId": context.business_id,
+        "filters": {
+            "year": context.year,
+            "month": context.month,
+            "documentType": "invoice",
+            "status": RECEIVABLE_STATUS,
+            "limit": limit,
+        },
+        "result": {
+            "customersCount": len(customers),
+            "returnedCustomersCount": len(top_customers),
+            "invoicesCount": invoices_count,
+            "totalAmount": receivable_amount,
+            "unidentifiedInvoicesCount": unidentified_count,
+            "unidentifiedAmount": unidentified_amount,
+            "customers": top_customers,
+        },
+        "metadata": {
+            "source": DEFAULT_ITEMS_COLLECTION,
+            "generatedAt": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "deterministic": True,
+            "amountBasis": "gross_document_amount",
+            "calculation": "receivable_invoices_only",
+        },
+    }
