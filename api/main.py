@@ -222,6 +222,9 @@ load_dotenv(ENV_PATH)
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
+from luca_mcp.server import mcp as luca_mcp
+from mcp.server.transport_security import TransportSecuritySettings
 
 from services.rate_limit_service import (
     check_rate_limit,
@@ -241,6 +244,45 @@ from services.qicore_client import gate as qicore_gate
 
 
 app = FastAPI(title="xapity", version="0.1.0")
+
+# ============================================================
+# XAPITY — LUCA MCP HTTP SECURITY
+# ============================================================
+
+luca_mcp_app = luca_mcp.streamable_http_app(
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            "localhost:*",
+            "127.0.0.1:*",
+            "xapity-api-dev-179536772092.us-central1.run.app",
+        ],
+        allowed_origins=[
+            "http://localhost:*",
+            "http://127.0.0.1:*",
+        ],
+    ),
+)
+
+
+# Gestiona el ciclo de vida del transporte MCP.
+
+# ============================================================
+# XAPITY — LUCA MCP LIFESPAN
+# ============================================================
+
+# Conserva el ciclo de vida original de FastAPI,
+# incluidos los eventos startup de Xapity.
+original_lifespan = app.router.lifespan_context
+
+@asynccontextmanager
+async def luca_mcp_lifespan(app):
+    async with original_lifespan(app):
+        async with luca_mcp.session_manager.run():
+            yield
+
+
+app.router.lifespan_context = luca_mcp_lifespan
 
 # Migrate startup event to FastAPI lifespan API.
 # Current implementation is intentionally kept for compatibility.
@@ -3013,3 +3055,6 @@ async def delete_appointment_endpoint(appointmentId: str):
         )
 
     return deleted_appointment
+
+# Montamos el servidor MCP bajo /mcp.
+app.mount("/", luca_mcp_app)
