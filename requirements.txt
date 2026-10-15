@@ -33,3 +33,4 @@ pymupdf #pip install pymupdf requests numpy
 chromadb
 numpy
 openpyxl
+mcp==2.3.0
