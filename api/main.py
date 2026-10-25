@@ -8,6 +8,7 @@ from typing import Optional, Any, Dict
 from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime, timezone, date, timedelta
+import ipaddress
 
 # Esta es la importanción correcta para los endpoints de Staff
 from schemas.staff import StaffCreateRequest, StaffUpdateRequest, StaffResponse
@@ -222,6 +223,7 @@ load_dotenv(ENV_PATH)
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
+
 from contextlib import asynccontextmanager
 from luca_mcp.server import mcp as luca_mcp
 from mcp.server.transport_security import TransportSecuritySettings
@@ -242,6 +244,44 @@ from fastapi.middleware.cors import CORSMiddleware
 from services.ollama_client import generate
 from services.qicore_client import gate as qicore_gate
 
+
+from db.mongo_mcp_oauth_requests import (
+    initialize_mcp_oauth_requests_storage,
+)
+
+
+from schemas.mcp_auth import (
+    MCPRegisterStartRequest,
+    MCPRegisterStartResponse,
+    MCPRegisterVerifyRequest,
+    MCPRegisterVerifyResponse,
+)
+
+from services.mcp_registration_service import (
+    start_mcp_registration,
+    verify_mcp_registration,
+)
+
+from db.mongo_mcp_registration import (
+    initialize_mcp_registration_storage,
+)
+
+
+from schemas.mcp_auth import MCPLoginRequest, MCPLoginResponse
+from services.mcp_login_service import authenticate_mcp_user
+
+from mcp.server.auth.routes import create_auth_routes
+from pydantic import AnyHttpUrl
+
+from luca_mcp.oauth_provider import LucaOAuthProvider
+from mcp.server.auth.settings import ClientRegistrationOptions
+
+from db.mongo_oauth_persistence import initialize_oauth_storage
+from api.mcp_oauth_login import router as mcp_oauth_login_router
+from api.mcp_oauth_login import (
+    router as mcp_oauth_login_router,
+    configure_mcp_oauth_login,
+)
 
 app = FastAPI(title="xapity", version="0.1.0")
 
@@ -264,16 +304,12 @@ luca_mcp_app = luca_mcp.streamable_http_app(
     ),
 )
 
-
-# Gestiona el ciclo de vida del transporte MCP.
-
 # ============================================================
 # XAPITY — LUCA MCP LIFESPAN
 # ============================================================
 
-# Conserva el ciclo de vida original de FastAPI,
-# incluidos los eventos startup de Xapity.
 original_lifespan = app.router.lifespan_context
+
 
 @asynccontextmanager
 async def luca_mcp_lifespan(app):
@@ -305,6 +341,13 @@ def startup_subscription_storage() -> None:
     
     # Xapity Access — Rate Limiting
     initialize_rate_limits_storage()
+    
+    # Xapity MCP
+    initialize_mcp_registration_storage()
+    initialize_mcp_oauth_requests_storage()
+    initialize_oauth_storage()
+
+
 
 
 #agregado por felix ortiz 16-03
@@ -354,24 +397,80 @@ def health():
 # XAPITY ACCESS — RATE LIMIT DEPENDENCIES
 # ============================================================
 
-import ipaddress
+# def get_client_ip(request: Request) -> str:
+#     """
+#     Resolves client IP for direct Google Cloud Run ingress.
 
+#     Expected X-Forwarded-For format:
+#         client_ip, google_proxy_ip
+
+#     If the caller supplied X-Forwarded-For:
+#         spoofed_ip, client_ip, google_proxy_ip
+
+#     The second-to-last entry is selected.
+
+#     This function assumes Cloud Run's documented
+#     proxy behavior and direct *.run.app ingress.
+#     """
+
+#     forwarded = request.headers.get("x-forwarded-for")
+
+#     if not forwarded:
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Missing client IP information.",
+#         )
+
+#     parts = [
+#         value.strip()
+#         for value in forwarded.split(",")
+#     ]
+
+#     if len(parts) < 2 or any(not value for value in parts):
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Invalid client IP information.",
+#         )
+
+#     try:
+#         # Validate both the client and proxy entries.
+#         client_ip = ipaddress.ip_address(parts[-2])
+#         ipaddress.ip_address(parts[-1])
+
+#     except ValueError as exc:
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Invalid client IP information.",
+#         ) from exc
+
+#     return str(client_ip)
 
 def get_client_ip(request: Request) -> str:
     """
-    Resolves client IP for direct Google Cloud Run ingress.
+    Resolves the client IP for rate limiting.
 
-    Expected X-Forwarded-For format:
-        client_ip, google_proxy_ip
+    Local development:
+        Uses the direct connection IP.
 
-    If the caller supplied X-Forwarded-For:
-        spoofed_ip, client_ip, google_proxy_ip
-
-    The second-to-last entry is selected.
-
-    This function assumes Cloud Run's documented
-    proxy behavior and direct *.run.app ingress.
+    Cloud Run:
+        Uses the second-to-last X-Forwarded-For entry,
+        following the existing direct-ingress assumption.
     """
+
+    environment = os.getenv("ENV", "dev").strip().lower()
+
+    if environment in {"dev", "local"}:
+        direct_ip = request.client.host if request.client else None
+
+        if direct_ip:
+            try:
+                parsed_ip = ipaddress.ip_address(direct_ip)
+
+                if parsed_ip.is_loopback:
+                    return str(parsed_ip)
+
+            except ValueError:
+                pass
 
     forwarded = request.headers.get("x-forwarded-for")
 
@@ -393,7 +492,6 @@ def get_client_ip(request: Request) -> str:
         )
 
     try:
-        # Validate both the client and proxy entries.
         client_ip = ipaddress.ip_address(parts[-2])
         ipaddress.ip_address(parts[-1])
 
@@ -469,6 +567,10 @@ def enforce_auth_rate_limits(
         limit=email_limit,
         window_seconds=window_seconds,
     )
+
+
+# Xapity MCP — configurar rate limiting del login OAuth
+configure_mcp_oauth_login(enforce_auth_rate_limits)
 
 
 # ============================================================
@@ -3056,5 +3158,135 @@ async def delete_appointment_endpoint(appointmentId: str):
 
     return deleted_appointment
 
-# Montamos el servidor MCP bajo /mcp.
+# ============================================================
+# XAPITY LUCA MCP — USER REGISTRATION
+# ============================================================
+
+@app.post(
+    "/auth/mcp/register/start",
+    response_model=MCPRegisterStartResponse,
+    status_code=200,
+)
+def mcp_register_start_endpoint(
+    payload: MCPRegisterStartRequest,
+    request: Request,
+):
+    enforce_auth_rate_limits(
+        request=request,
+        email=str(payload.email),
+        scope="mcp_register_start",
+        ip_limit=10,
+        email_limit=3,
+        window_seconds=900,
+    )
+
+    try:
+        return start_mcp_registration(payload)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+
+@app.post(
+    "/auth/mcp/register/verify",
+    response_model=MCPRegisterVerifyResponse,
+    status_code=201,
+)
+def mcp_register_verify_endpoint(
+    payload: MCPRegisterVerifyRequest,
+    request: Request,
+):
+    enforce_auth_rate_limits(
+        request=request,
+        email=str(payload.email),
+        scope="mcp_register_verify",
+        ip_limit=10,
+        email_limit=5,
+        window_seconds=900,
+    )
+
+    try:
+        user = verify_mcp_registration(payload)
+        return {"user": user}
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+
+@app.post(
+    "/auth/mcp/login",
+    response_model=MCPLoginResponse,
+    status_code=200,
+)
+def mcp_login_endpoint(
+    payload: MCPLoginRequest,
+    request: Request,
+):
+    enforce_auth_rate_limits(
+        request=request,
+        email=str(payload.email),
+        scope="mcp_login",
+        ip_limit=10,
+        email_limit=5,
+        window_seconds=60,
+    )
+
+    try:
+        user = authenticate_mcp_user(
+            email=str(payload.email),
+            password=payload.password,
+        )
+
+        return {"user": user}
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Credenciales inválidas",
+        ) from exc
+
+
+# ============================================================
+# XAPITY LUCA MCP — OAUTH AUTHORIZATION SERVER
+# ============================================================
+
+XAPITY_OAUTH_ISSUER = (
+    "https://xapity-api-dev-179536772092.us-central1.run.app"
+)
+
+luca_oauth_provider = LucaOAuthProvider()
+
+
+oauth_routes = create_auth_routes(
+    provider=luca_oauth_provider,
+    issuer_url=AnyHttpUrl(XAPITY_OAUTH_ISSUER),
+    client_registration_options=ClientRegistrationOptions(
+        enabled=True,
+        valid_scopes=["luca:sales:read"],
+        default_scopes=["luca:sales:read"],
+    ),
+)
+
+
+for route in oauth_routes:
+    app.router.routes.append(route)
+
+
+# ============================================================
+# XAPITY — LUCA MCP HTTP MOUNT
+# ============================================================
+
+app.include_router(mcp_oauth_login_router)
+
+
+# ============================================================
+# XAPITY — LUCA MCP HTTP MOUNT
+# ============================================================
+
 app.mount("/", luca_mcp_app)

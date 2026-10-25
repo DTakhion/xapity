@@ -84,6 +84,11 @@ spec:
                 secretKeyRef:
                   name: xapity-dev-jwt-secret-key
                   key: latest
+            - name: LUCA_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: xapity-luca-dev-access-token
+                  key: latest
 
             - name: EMAIL_MODE
               value: "smtp"
