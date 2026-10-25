@@ -262,3 +262,191 @@ Equipo Xapity
         body_text=body_text,
         body_html=body_html,
     )
+
+
+def send_admin_provisioning_email(
+    *,
+    to_email: str,
+    token: str,
+    expires_hours: int,
+    registration_url: str,
+) -> None:
+    """
+    Sends an administrative provisioning invitation.
+
+    The token is bound to the recipient's email,
+    expires after the configured period,
+    and can be used only once.
+    """
+
+    from html import escape
+
+    subject = "Xapity Access | Invitación para administrar tu recinto"
+
+    safe_token = escape(token)
+    safe_url = escape(registration_url, quote=True)
+
+    body_text = f"""
+Hola,
+
+Has sido invitado a registrarte como administrador
+de un recinto en Xapity Access.
+
+Para comenzar, ingresa al siguiente enlace:
+
+{registration_url}
+
+Tu token personal de autorización es:
+
+{token}
+
+Este token:
+- Está asociado exclusivamente a tu correo: {to_email}
+- Expira en {expires_hours} horas.
+- Puede utilizarse una sola vez.
+
+Durante el registro deberás ingresar este token
+para autorizar la creación de tu cuenta administrativa.
+
+Posteriormente, recibirás un código de verificación
+para confirmar tu correo electrónico.
+
+Si no esperabas esta invitación, puedes ignorar este mensaje.
+
+Equipo Xapity
+""".strip()
+
+    body_html = f"""
+<!doctype html>
+<html>
+  <body style="font-family: Arial, sans-serif;
+               color: #111827;
+               line-height: 1.6;">
+
+    <div style="max-width: 560px; margin: 0 auto;
+                padding: 32px;">
+
+      <h2 style="color: #111827;">
+        Bienvenido a Xapity Access
+      </h2>
+
+      <p>Hola,</p>
+
+      <p>
+        Has sido invitado a crear una cuenta de
+        <strong>administrador de recinto</strong>
+        en Xapity Access.
+      </p>
+
+      <p>Tu token personal de autorización es:</p>
+
+      <div style="background: #f3f4f6;
+                  border-radius: 8px;
+                  padding: 20px;
+                  text-align: center;
+                  margin: 24px 0;">
+
+        <code style="font-size: 16px;
+                     font-weight: bold;
+                     overflow-wrap: anywhere;">
+          {safe_token}
+        </code>
+
+      </div>
+
+      <p>
+        Esta autorización está asociada a tu correo,
+        es válida por <strong>{expires_hours} horas</strong>
+        y puede utilizarse una sola vez.
+      </p>
+
+      <p>
+        <a href="{safe_url}"
+           style="display: inline-block;
+                  padding: 12px 20px;
+                  background: #111827;
+                  color: #ffffff;
+                  text-decoration: none;
+                  border-radius: 6px;">
+          Crear mi cuenta de administrador
+        </a>
+      </p>
+
+      <p>
+        Durante el registro deberás ingresar el token
+        recibido y completar tus datos.
+      </p>
+
+      <p>
+        Posteriormente, verificaremos tu correo
+        mediante un código de seis dígitos.
+      </p>
+
+      <hr style="border: 0;
+                 border-top: 1px solid #e5e7eb;
+                 margin: 28px 0;">
+
+      <p style="font-size: 13px; color: #6b7280;">
+        Si no esperabas esta invitación,
+        puedes ignorar este mensaje.
+      </p>
+
+      <p>Equipo Xapity</p>
+
+    </div>
+  </body>
+</html>
+""".strip()
+
+    send_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+    )
+
+
+def send_mcp_provisioning_email(
+    *,
+    to_email: str,
+    token: str,
+    expires_hours: int,
+    registration_url: str,
+) -> None:
+    """
+    Sends an invitation to register for Xapity Luca MCP.
+    """
+
+    subject = "Xapity Luca MCP | Invitación de acceso"
+
+    body_text = f"""
+Hola,
+
+Has sido invitado a crear una cuenta para
+acceder a Xapity Luca MCP desde ChatGPT.
+
+Registro:
+{registration_url}
+
+Tu token personal de autorización es:
+
+{token}
+
+Esta invitación:
+- Está asociada al correo: {to_email}
+- Expira en {expires_hours} horas.
+- Puede utilizarse una sola vez.
+
+Durante el registro recibirás también un código
+para verificar tu correo electrónico.
+
+Si no solicitaste este acceso, ignora este mensaje.
+
+Equipo Xapity
+""".strip()
+
+    send_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=body_text,
+    )
