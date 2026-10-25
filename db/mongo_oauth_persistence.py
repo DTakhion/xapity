@@ -159,29 +159,108 @@ def _validate_redirect_uri(uri: str) -> None:
             "HTTP redirect URIs are allowed only for loopback."
         )
 
+# def register_oauth_client(
+#     client: OAuthClientInformationFull,
+# ) -> None:
+#     """
+#     Registra un cliente OAuth.
+
+#     El client_id debe ser único.
+#     No permite sobrescribir clientes existentes.
+#     """
+    
+#     if client.client_secret is not None:
+#         raise ValueError(
+#             "Confidential OAuth clients are not supported in this PoC."
+#         )
+
+#     if client.token_endpoint_auth_method != "none":
+#         raise ValueError(
+#             "Only public OAuth clients are supported."
+#         )
+
+#     if client.grant_types != ["authorization_code"]:
+#         raise ValueError(
+#             "Only authorization_code grant is supported."
+#         )
+
+#     if client.response_types != ["code"]:
+#         raise ValueError(
+#             "Only code response type is supported."
+#         )
+
+#     if not client.redirect_uris:
+#         raise ValueError(
+#             "At least one redirect URI is required."
+#         )
+
+#     for uri in client.redirect_uris:
+#         _validate_redirect_uri(str(uri))
+
+#     collection = get_oauth_clients_collection()
+
+#     document = {
+#         "clientId": client.client_id,
+#         "clientData": client.model_dump(mode="json"),
+#     }
+
+#     try:
+#         collection.insert_one(document)
+
+#     except DuplicateKeyError as exc:
+#         raise ValueError(
+#             "OAuth client already registered."
+#         ) from exc
+
+
 def register_oauth_client(
     client: OAuthClientInformationFull,
 ) -> None:
     """
-    Registra un cliente OAuth.
+    Registra clientes OAuth públicos y confidenciales.
 
-    El client_id debe ser único.
-    No permite sobrescribir clientes existentes.
+    Compatible con el registro dinámico (DCR) del SDK MCP.
     """
-    
-    if client.client_secret is not None:
+
+    allowed_auth_methods = {
+        "none",
+        "client_secret_post",
+        "client_secret_basic",
+    }
+
+    auth_method = client.token_endpoint_auth_method
+
+    if auth_method not in allowed_auth_methods:
         raise ValueError(
-            "Confidential OAuth clients are not supported in this PoC."
+            "Unsupported OAuth client authentication method."
         )
 
-    if client.token_endpoint_auth_method != "none":
-        raise ValueError(
-            "Only public OAuth clients are supported."
-        )
+    # Consistencia entre método y secreto emitido por el SDK.
+    if auth_method == "none":
+        if client.client_secret is not None:
+            raise ValueError(
+                "Public OAuth clients must not have a secret."
+            )
+    else:
+        if not client.client_secret:
+            raise ValueError(
+                "Confidential OAuth clients require a secret."
+            )
 
-    if client.grant_types != ["authorization_code"]:
+    # Solo los grants implementados por nuestro proveedor.
+    allowed_grants = {
+        "authorization_code",
+        "refresh_token",
+    }
+
+    grant_types = set(client.grant_types or [])
+
+    if (
+        "authorization_code" not in grant_types
+        or not grant_types.issubset(allowed_grants)
+    ):
         raise ValueError(
-            "Only authorization_code grant is supported."
+            "Unsupported OAuth grant types."
         )
 
     if client.response_types != ["code"]:
