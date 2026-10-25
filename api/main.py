@@ -473,6 +473,23 @@ def get_client_ip(request: Request) -> str:
                 pass
 
     forwarded = request.headers.get("x-forwarded-for")
+    
+    # Diagnóstico temporal: Cloud Run / OAuth MCP
+    import logging
+
+    logging.warning(
+        "CLIENT_IP_DIAGNOSTIC path=%s forwarded_count=%s direct_client_present=%s",
+        request.url.path,
+        len(forwarded.split(",")) if forwarded else 0,
+        bool(request.client and request.client.host),
+    )
+
+    if not forwarded:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing client IP information.",
+        )
+
 
     if not forwarded:
         raise HTTPException(
