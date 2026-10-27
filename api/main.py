@@ -397,93 +397,34 @@ def health():
 # XAPITY ACCESS — RATE LIMIT DEPENDENCIES
 # ============================================================
 
-# def get_client_ip(request: Request) -> str:
-#     """
-#     Resolves client IP for direct Google Cloud Run ingress.
-
-#     Expected X-Forwarded-For format:
-#         client_ip, google_proxy_ip
-
-#     If the caller supplied X-Forwarded-For:
-#         spoofed_ip, client_ip, google_proxy_ip
-
-#     The second-to-last entry is selected.
-
-#     This function assumes Cloud Run's documented
-#     proxy behavior and direct *.run.app ingress.
-#     """
-
-#     forwarded = request.headers.get("x-forwarded-for")
-
-#     if not forwarded:
-#         raise HTTPException(
-#             status_code=400,
-#             detail="Missing client IP information.",
-#         )
-
-#     parts = [
-#         value.strip()
-#         for value in forwarded.split(",")
-#     ]
-
-#     if len(parts) < 2 or any(not value for value in parts):
-#         raise HTTPException(
-#             status_code=400,
-#             detail="Invalid client IP information.",
-#         )
-
-#     try:
-#         # Validate both the client and proxy entries.
-#         client_ip = ipaddress.ip_address(parts[-2])
-#         ipaddress.ip_address(parts[-1])
-
-#     except ValueError as exc:
-#         raise HTTPException(
-#             status_code=400,
-#             detail="Invalid client IP information.",
-#         ) from exc
-
-#     return str(client_ip)
 
 def get_client_ip(request: Request) -> str:
     """
-    Resolves the client IP for rate limiting.
+    Resolves the client IP for authentication rate limiting.
 
     Local development:
-        Uses the direct connection IP.
+        Accepts the direct connection IP when it is loopback.
 
-    Cloud Run:
-        Uses the second-to-last X-Forwarded-For entry,
-        following the existing direct-ingress assumption.
+    Google Cloud Run (direct ingress):
+        Uses the last X-Forwarded-For entry, appended by
+        Google's serving infrastructure.
+
+    Assumes requests reach the application through Cloud Run,
+    without an additional external reverse proxy.
     """
-
     environment = os.getenv("ENV", "dev").strip().lower()
 
-    if environment in {"dev", "local"}:
-        direct_ip = request.client.host if request.client else None
+    direct_ip = request.client.host if request.client else None
 
-        if direct_ip:
-            try:
-                parsed_ip = ipaddress.ip_address(direct_ip)
-
-                if parsed_ip.is_loopback:
-                    return str(parsed_ip)
-
-            except ValueError:
-                pass
+    if environment in {"dev", "local"} and direct_ip:
+        try:
+            parsed_ip = ipaddress.ip_address(direct_ip)
+            if parsed_ip.is_loopback:
+                return str(parsed_ip)
+        except ValueError:
+            pass
 
     forwarded = request.headers.get("x-forwarded-for")
-    
-    # Diagnóstico temporal: Cloud Run / OAuth MCP
-    import logging
-
-    logging.warning(
-        f"CLIENT_IP_DIAGNOSTIC "
-        f"path={request.url.path} "
-        f"forwarded_count={len(forwarded.split(',')) if forwarded else 0} "
-        f"direct_client_present={bool(request.client and request.client.host)}"
-    )
-
 
     if not forwarded:
         raise HTTPException(
@@ -491,28 +432,16 @@ def get_client_ip(request: Request) -> str:
             detail="Missing client IP information.",
         )
 
+    parts = [value.strip() for value in forwarded.split(",")]
 
-    if not forwarded:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing client IP information.",
-        )
-
-    parts = [
-        value.strip()
-        for value in forwarded.split(",")
-    ]
-
-    if len(parts) < 2 or any(not value for value in parts):
+    if not parts[-1]:
         raise HTTPException(
             status_code=400,
             detail="Invalid client IP information.",
         )
 
     try:
-        client_ip = ipaddress.ip_address(parts[-2])
-        ipaddress.ip_address(parts[-1])
-
+        client_ip = ipaddress.ip_address(parts[-1])
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -520,6 +449,7 @@ def get_client_ip(request: Request) -> str:
         ) from exc
 
     return str(client_ip)
+
 
 
 def enforce_rate_limit(
